@@ -179,7 +179,7 @@ var Typo;
          * Read the contents of a file.
          *
          * @param {string} path The path (relative) to the file.
-         * @param {string} [charset="ISO8859-1"] The expected charset of the file
+         * @param {string} [charset="UTF-8"] The expected charset of the file
          * @param {boolean} async If true, the file will be read asynchronously. For node.js this does nothing, all
          *        files are read synchronously.
          * @returns {string} The file data if async is false, otherwise a promise object. If running node.js, the data is
