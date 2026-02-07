@@ -44,6 +44,7 @@ var Typo;
         this.dictionary = null;
         this.rules = {};
         this.dictionaryTable = {};
+        this.compoundRules = [];
         this.compoundRuleCodes = {};
         this.replacementTable = [];
         this.flags = settings.flags || {};
@@ -53,12 +54,7 @@ var Typo;
         // HYBRID OPTIMIZATION: Tables for lazy evaluation
         this.lazyEvalTable = {};      // Words that need lazy expansion
         this.expansionCache = {};     // Cache of lazy-evaluated expansions
-        this.compoundRules = [];
-        this.compoundRuleCodes = {};
-        this.replacementTable = [];
-        this.flags = settings.flags || {};
-        this.memoized = {};
-        this.loaded = false;
+        
         var self = this;
         var path;
         // Loop-control variables.
