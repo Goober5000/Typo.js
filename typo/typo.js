@@ -340,21 +340,6 @@ var Typo;
             return line;
         },
         /**
-         * Parses the words out from the .dic file.
-         *
-         * @param {string} data The data from the dictionary file.
-         * @returns HashMap The lookup table containing all of the words and
-         *                 word forms from the dictionary.
-         */
-        /**
-         * Adds a word to the dictionary table with its associated rule codes.
-         * Some dictionaries list the same word multiple times with different rule sets.
-         * 
-         * @param {Object} dictionaryTable The dictionary table to add to
-         * @param {string} word The word to add
-         * @param {Array} rules The rule codes associated with this word
-         */
-        /**
          * HYBRID OPTIMIZATION: Determines if a rule is "simple" (safe for eager expansion).
          * Simple rules have no continuation classes and are not combineable.
          * 
@@ -547,6 +532,13 @@ var Typo;
             }
         },
 
+        /**
+         * Parses the words out from the .dic file.
+         *
+         * @param {string} data The data from the dictionary file.
+         * @returns HashMap The lookup table containing all of the words and
+         *                 word forms from the dictionary.
+         */
         _parseDIC: function (data) {
             data = this._removeDicComments(data);
             var lines = data.split(/\r?\n/);
@@ -591,12 +583,6 @@ var Typo;
 
             return dictionaryTable;
         },
-        /**
-         * Removes comment lines and then cleans up blank lines and trailing whitespace.
-         *
-         * @param {string} data The data from a .dic file.
-         * @return {string} The cleaned-up data.
-         */
         /**
          * HYBRID OPTIMIZATION: Expands a word lazily by applying all its complex rules.
          * Results are cached to avoid re-computation.
@@ -661,6 +647,12 @@ var Typo;
             
             return allForms;
         },
+        /**
+         * Removes comment lines and then cleans up blank lines and trailing whitespace.
+         *
+         * @param {string} data The data from a .dic file.
+         * @return {string} The cleaned-up data.
+         */
         _removeDicComments: function (data) {
             // I can't find any official documentation on it, but at least the de_DE
             // dictionary uses tab-indented lines as comments.
@@ -742,12 +734,6 @@ var Typo;
             }
             return newWords;
         },
-        /**
-         * Checks whether a word or a capitalization variant exists in the current dictionary.
-         * The word is trimmed and several variations of capitalizations are checked.
-         * If you want to check a word without any changes made to it, call checkExact()
-         *
-         * @see http://blog.stevenlevithan.com/archives/faster-trim-javascript re:trimming function
         /**
          * HYBRID OPTIMIZATION: Checks whether a word exists in the current dictionary.
          * Uses lazy evaluation for words with complex affix rules.
