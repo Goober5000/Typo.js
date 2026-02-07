@@ -44,6 +44,15 @@ var Typo;
         this.dictionary = null;
         this.rules = {};
         this.dictionaryTable = {};
+        this.compoundRuleCodes = {};
+        this.replacementTable = [];
+        this.flags = settings.flags || {};
+        this.memoized = {};
+        this.loaded = false;
+        
+        // HYBRID OPTIMIZATION: Tables for lazy evaluation
+        this.lazyEvalTable = {};      // Words that need lazy expansion
+        this.expansionCache = {};     // Cache of lazy-evaluated expansions
         this.compoundRules = [];
         this.compoundRuleCodes = {};
         this.replacementTable = [];
@@ -349,6 +358,57 @@ var Typo;
          * @param {string} word The word to add
          * @param {Array} rules The rule codes associated with this word
          */
+        /**
+         * HYBRID OPTIMIZATION: Determines if a rule is "simple" (safe for eager expansion).
+         * Simple rules have no continuation classes and are not combineable.
+         * 
+         * @param {Object} rule The rule to check
+         * @returns {boolean} True if rule is simple
+         */
+        _isSimpleRule: function (rule) {
+            if (!rule) return true;
+            
+            // Check if any entry has continuation classes
+            for (var i = 0, len = rule.entries.length; i < len; i++) {
+                if (rule.entries[i].continuationClasses && 
+                    rule.entries[i].continuationClasses.length > 0) {
+                    return false; // Complex: has continuation classes
+                }
+            }
+            
+            // Check if rule is combineable
+            if (rule.combineable) {
+                return false; // Complex: can combine with other rules
+            }
+            
+            return true; // Simple: safe to expand eagerly
+        },
+
+        /**
+         * HYBRID OPTIMIZATION: Determines if a word should be lazily evaluated.
+         * A word is lazy-evaluated if ANY of its rules are complex.
+         * 
+         * @param {Array} ruleCodesArray The rule codes for a word
+         * @returns {boolean} True if word should be lazy-evaluated
+         */
+        _shouldLazyEvaluate: function (ruleCodesArray) {
+            for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
+                var rule = this.rules[ruleCodesArray[i]];
+                if (!this._isSimpleRule(rule)) {
+                    return true; // At least one complex rule
+                }
+            }
+            return false; // All rules are simple
+        },
+
+        /**
+         * Adds a word to the dictionary table with its associated rule codes.
+         * Some dictionaries list the same word multiple times with different rule sets.
+         * 
+         * @param {Object} dictionaryTable The dictionary table to add to
+         * @param {string} word The word to add
+         * @param {Array} rules The rule codes associated with this word
+         */
         _addWordToDictionary: function (dictionaryTable, word, rules) {
             if (!dictionaryTable.hasOwnProperty(word)) {
                 dictionaryTable[word] = null;
@@ -441,8 +501,9 @@ var Typo;
         },
 
         /**
-         * Expands a word by applying all its affix rules and combinations.
-         * This is the main entry point for affix expansion.
+         * HYBRID OPTIMIZATION: Expands a word using hybrid eager/lazy approach.
+         * - Simple rules: Expanded immediately (eager)
+         * - Complex rules: Stored for lazy evaluation
          * 
          * @param {string} word The base word from the dictionary
          * @param {Array} ruleCodesArray Array of rule codes to apply to this word
@@ -461,25 +522,35 @@ var Typo;
                 this._addWordToDictionary(dictionaryTable, word, ruleCodesArray);
             }
 
-            // Apply each affix rule to the word
-            for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
-                var ruleCode = ruleCodesArray[i];
-
-                // Apply the rule and handle combinations
-                this._applySingleRuleToWord(word, ruleCode, i, ruleCodesArray, dictionaryTable);
-
-                // Track for compound word formation
-                this._trackCompoundWord(word, ruleCode);
+            // HYBRID OPTIMIZATION: Check if this word should be lazy-evaluated
+            if (this._shouldLazyEvaluate(ruleCodesArray)) {
+                // LAZY PATH: Store for on-demand expansion
+                this.lazyEvalTable[word] = ruleCodesArray;
+                
+                // Apply only simple rules immediately for quick lookups
+                for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
+                    var ruleCode = ruleCodesArray[i];
+                    var rule = this.rules[ruleCode];
+                    
+                    if (this._isSimpleRule(rule)) {
+                        // Expand simple rules normally
+                        this._applySingleRuleToWord(word, ruleCode, i, ruleCodesArray, dictionaryTable);
+                    }
+                    
+                    // Always track for compound words
+                    this._trackCompoundWord(word, ruleCode);
+                }
+            }
+            else {
+                // EAGER PATH: Fully expand all rules (original behavior)
+                for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
+                    var ruleCode = ruleCodesArray[i];
+                    this._applySingleRuleToWord(word, ruleCode, i, ruleCodesArray, dictionaryTable);
+                    this._trackCompoundWord(word, ruleCode);
+                }
             }
         },
 
-        /**
-         * Parses the dictionary file and builds the in-memory dictionary table.
-         * Each word is expanded by applying its affix rules to generate all valid forms.
-         * 
-         * @param {string} data The contents of a .dic file
-         * @returns {Object} The populated dictionary table
-         */
         _parseDIC: function (data) {
             data = this._removeDicComments(data);
             var lines = data.split(/\r?\n/);
@@ -530,6 +601,70 @@ var Typo;
          * @param {string} data The data from a .dic file.
          * @return {string} The cleaned-up data.
          */
+        /**
+         * HYBRID OPTIMIZATION: Expands a word lazily by applying all its complex rules.
+         * Results are cached to avoid re-computation.
+         * 
+         * @param {string} baseWord The root word to expand
+         * @param {Array} ruleCodesArray The rule codes to apply
+         * @returns {Array} Array of all generated word forms
+         */
+        _expandLazy: function (baseWord, ruleCodesArray) {
+            // Check cache first
+            var cacheKey = baseWord;
+            if (this.expansionCache.hasOwnProperty(cacheKey)) {
+                return this.expansionCache[cacheKey];
+            }
+            
+            var allForms = [baseWord]; // Include the base word
+            var tempTable = {};
+            tempTable[baseWord] = true;
+            
+            // Apply each rule
+            for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
+                var ruleCode = ruleCodesArray[i];
+                var rule = this.rules[ruleCode];
+                
+                if (!rule) continue;
+                
+                // Apply the rule
+                var newWords = this._applyRule(baseWord, rule);
+                
+                for (var j = 0, jlen = newWords.length; j < jlen; j++) {
+                    var newWord = newWords[j];
+                    
+                    if (!tempTable.hasOwnProperty(newWord)) {
+                        tempTable[newWord] = true;
+                        allForms.push(newWord);
+                    }
+                    
+                    // Apply combinations if rule is combineable
+                    if (rule.combineable) {
+                        for (var k = i + 1; k < len; k++) {
+                            var combineCode = ruleCodesArray[k];
+                            var combineRule = this.rules[combineCode];
+                            
+                            if (combineRule && combineRule.combineable && 
+                                rule.type !== combineRule.type) {
+                                var combinedWords = this._applyRule(newWord, combineRule);
+                                for (var m = 0, mlen = combinedWords.length; m < mlen; m++) {
+                                    var combinedWord = combinedWords[m];
+                                    if (!tempTable.hasOwnProperty(combinedWord)) {
+                                        tempTable[combinedWord] = true;
+                                        allForms.push(combinedWord);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Cache the results
+            this.expansionCache[cacheKey] = allForms;
+            
+            return allForms;
+        },
         _removeDicComments: function (data) {
             // I can't find any official documentation on it, but at least the de_DE
             // dictionary uses tab-indented lines as comments.
@@ -617,56 +752,99 @@ var Typo;
          * If you want to check a word without any changes made to it, call checkExact()
          *
          * @see http://blog.stevenlevithan.com/archives/faster-trim-javascript re:trimming function
+        /**
+         * HYBRID OPTIMIZATION: Checks whether a word exists in the current dictionary.
+         * Uses lazy evaluation for words with complex affix rules.
          *
-         * @param {string} aWord The word to check.
+         * @param {string} word The word to check.
          * @returns {boolean}
          */
-        check: function (aWord) {
+        checkExact: function (word) {
             if (!this.loaded) {
                 throw "Dictionary not loaded.";
             }
-            if (!aWord) {
+            
+            var ruleCodes = this.dictionaryTable[word];
+            var i, _len;
+            
+            if (typeof ruleCodes === 'undefined') {
+                // Not in pre-expanded table - check lazy eval table
+                // Try to find a base word that might generate this word
+                for (var baseWord in this.lazyEvalTable) {
+                    if (this.lazyEvalTable.hasOwnProperty(baseWord)) {
+                        // Expand this base word and check if it generates our word
+                        var ruleCodesArray = this.lazyEvalTable[baseWord];
+                        var expandedForms = this._expandLazy(baseWord, ruleCodesArray);
+                        
+                        if (expandedForms.indexOf(word) !== -1) {
+                            // Found it! This word is a valid form
+                            return true;
+                        }
+                    }
+                }
+                
+                // Check if this might be a compound word
+                if ("COMPOUNDMIN" in this.flags && word.length >= this.flags.COMPOUNDMIN) {
+                    for (i = 0, _len = this.compoundRules.length; i < _len; i++) {
+                        if (word.match(this.compoundRules[i])) {
+                            return true;
+                        }
+                    }
+                }
+                
                 return false;
             }
-            // Remove leading and trailing whitespace
-            var trimmedWord = aWord.replace(/^\s\s*/, '').replace(/\s\s*$/, '');
-            if (this.checkExact(trimmedWord)) {
+            else if (ruleCodes === null) {
+                // a null (but not undefined) value for an entry in the dictionary table
+                // means that the word is in the dictionary but has no flags.
                 return true;
             }
-            // The exact word is not in the dictionary.
-            if (trimmedWord.toUpperCase() === trimmedWord) {
-                // The word was supplied in all uppercase.
-                // Check for a capitalized form of the word.
-                var capitalizedWord = trimmedWord[0] + trimmedWord.substring(1).toLowerCase();
-                if (this.hasFlag(capitalizedWord, "KEEPCASE")) {
-                    // Capitalization variants are not allowed for this word.
-                    return false;
-                }
-                if (this.checkExact(capitalizedWord)) {
-                    // The all-caps word is a capitalized word spelled correctly.
-                    return true;
-                }
-                if (this.checkExact(trimmedWord.toLowerCase())) {
-                    // The all-caps is a lowercase word spelled correctly.
-                    return true;
-                }
-            }
-            var uncapitalizedWord = trimmedWord[0].toLowerCase() + trimmedWord.substring(1);
-            if (uncapitalizedWord !== trimmedWord) {
-                if (this.hasFlag(uncapitalizedWord, "KEEPCASE")) {
-                    // Capitalization variants are not allowed for this word.
-                    return false;
-                }
-                // Check for an uncapitalized form
-                if (this.checkExact(uncapitalizedWord)) {
-                    // The word is spelled correctly but with the first letter capitalized.
-                    return true;
+            else if (typeof ruleCodes === 'object') { // this.dictionary['hasOwnProperty'] will be a function.
+                for (i = 0, _len = ruleCodes.length; i < _len; i++) {
+                    if (!this.hasFlag(word, "ONLYINCOMPOUND", ruleCodes[i])) {
+                        return true;
+                    }
                 }
             }
             return false;
         },
         /**
-         * Checks whether a word exists in the current dictionary.
+         * HYBRID OPTIMIZATION: Returns statistics about dictionary memory usage.
+         * Useful for debugging and optimization tuning.
+         * 
+         * @returns {Object} Statistics object
+         */
+        getStats: function () {
+            var eagerCount = 0;
+            var lazyCount = Object.keys(this.lazyEvalTable).length;
+            var cacheSize = Object.keys(this.expansionCache).length;
+            var totalCachedForms = 0;
+            
+            for (var word in this.dictionaryTable) {
+                if (this.dictionaryTable.hasOwnProperty(word)) {
+                    eagerCount++;
+                }
+            }
+            
+            for (var key in this.expansionCache) {
+                if (this.expansionCache.hasOwnProperty(key)) {
+                    totalCachedForms += this.expansionCache[key].length;
+                }
+            }
+            
+            return {
+                eagerExpandedWords: eagerCount,
+                lazyEvalWords: lazyCount,
+                cachedExpansions: cacheSize,
+                totalCachedForms: totalCachedForms,
+                memoryApproach: 'hybrid',
+                estimatedMemorySavings: Math.round((lazyCount / (eagerCount + lazyCount)) * 100) + '%'
+            };
+        },
+
+        /**
+         * HYBRID OPTIMIZATION: Checks whether a word exists in the current dictionary.
+         * Uses lazy evaluation for words with complex affix rules.
          *
          * @param {string} word The word to check.
          * @returns {boolean}
