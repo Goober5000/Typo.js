@@ -843,38 +843,56 @@ var Typo;
         },
 
         /**
-         * HYBRID OPTIMIZATION: Checks whether a word exists in the current dictionary.
-         * Uses lazy evaluation for words with complex affix rules.
+         * Checks whether a word is spelled correctly or not, taking into account
+         * capitalization variants.
          *
-         * @param {string} word The word to check.
+         * If you want to check a word without any changes made to it, call checkExact()
+         *
+         * @see http://blog.stevenlevithan.com/archives/faster-trim-javascript re:trimming function
+         *
+         * @param {string} aWord The word to check.
          * @returns {boolean}
          */
-        checkExact: function (word) {
+        check: function (aWord) {
             if (!this.loaded) {
                 throw "Dictionary not loaded.";
             }
-            var ruleCodes = this.dictionaryTable[word];
-            var i, _len;
-            if (typeof ruleCodes === 'undefined') {
-                // Check if this might be a compound word.
-                if ("COMPOUNDMIN" in this.flags && word.length >= this.flags.COMPOUNDMIN) {
-                    for (i = 0, _len = this.compoundRules.length; i < _len; i++) {
-                        if (word.match(this.compoundRules[i])) {
-                            return true;
-                        }
-                    }
-                }
+            if (!aWord) {
+                return false;
             }
-            else if (ruleCodes === null) {
-                // a null (but not undefined) value for an entry in the dictionary table
-                // means that the word is in the dictionary but has no flags.
+            // Remove leading and trailing whitespace
+            var trimmedWord = aWord.replace(/^\s\s*/, '').replace(/\s\s*$/, '');
+            if (this.checkExact(trimmedWord)) {
                 return true;
             }
-            else if (typeof ruleCodes === 'object') { // this.dictionary['hasOwnProperty'] will be a function.
-                for (i = 0, _len = ruleCodes.length; i < _len; i++) {
-                    if (!this.hasFlag(word, "ONLYINCOMPOUND", ruleCodes[i])) {
-                        return true;
-                    }
+            // The exact word is not in the dictionary.
+            if (trimmedWord.toUpperCase() === trimmedWord) {
+                // The word was supplied in all uppercase.
+                // Check for a capitalized form of the word.
+                var capitalizedWord = trimmedWord[0] + trimmedWord.substring(1).toLowerCase();
+                if (this.hasFlag(capitalizedWord, "KEEPCASE")) {
+                    // Capitalization variants are not allowed for this word.
+                    return false;
+                }
+                if (this.checkExact(capitalizedWord)) {
+                    // The all-caps word is a capitalized word spelled correctly.
+                    return true;
+                }
+                if (this.checkExact(trimmedWord.toLowerCase())) {
+                    // The all-caps is a lowercase word spelled correctly.
+                    return true;
+                }
+            }
+            var uncapitalizedWord = trimmedWord[0].toLowerCase() + trimmedWord.substring(1);
+            if (uncapitalizedWord !== trimmedWord) {
+                if (this.hasFlag(uncapitalizedWord, "KEEPCASE")) {
+                    // Capitalization variants are not allowed for this word.
+                    return false;
+                }
+                // Check for an uncapitalized form
+                if (this.checkExact(uncapitalizedWord)) {
+                    // The word is spelled correctly but with the first letter capitalized.
+                    return true;
                 }
             }
             return false;
