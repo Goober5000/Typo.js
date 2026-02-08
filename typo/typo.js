@@ -1139,6 +1139,20 @@ var Typo;
             this.bloomFilter = new BloomFilter(bloomJson.size, bloomJson.numHashes);
             this.bloomFilter.fromJSON(bloomJson);
             
+            // Load compound word rules and flags
+            var compoundData = this._readFile(basePath + '/compound.json');
+            var compoundJson = JSON.parse(compoundData);
+            
+            // Restore compound rules (deserialize RegExp objects)
+            this.compoundRules = [];
+            for (var i = 0; i < compoundJson.compoundRules.length; i++) {
+                var ruleData = compoundJson.compoundRules[i];
+                this.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
+            }
+            
+            this.compoundRuleCodes = compoundJson.compoundRuleCodes;
+            this.flags = compoundJson.flags;
+            
             this.loaded = true;
         },
         
@@ -1150,17 +1164,30 @@ var Typo;
             var self = this;
             var basePath = this.preCalculatedPath + '/' + this.dictionary;
             
-            // Load index
+            // Load index, bloom filter, and compound data
             var indexPromise = this._readFile(basePath + '/index.json', 'utf8', true);
             var bloomPromise = this._readFile(basePath + '/bloom.json', 'utf8', true);
+            var compoundPromise = this._readFile(basePath + '/compound.json', 'utf8', true);
             
-            Promise.all([indexPromise, bloomPromise]).then(function(results) {
+            Promise.all([indexPromise, bloomPromise, compoundPromise]).then(function(results) {
                 var index = JSON.parse(results[0]);
                 self.partitionIndex = index.partitions;
                 
                 var bloomJson = JSON.parse(results[1]);
                 self.bloomFilter = new BloomFilter(bloomJson.size, bloomJson.numHashes);
                 self.bloomFilter.fromJSON(bloomJson);
+                
+                var compoundJson = JSON.parse(results[2]);
+                
+                // Restore compound rules (deserialize RegExp objects)
+                self.compoundRules = [];
+                for (var i = 0; i < compoundJson.compoundRules.length; i++) {
+                    var ruleData = compoundJson.compoundRules[i];
+                    self.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
+                }
+                
+                self.compoundRuleCodes = compoundJson.compoundRuleCodes;
+                self.flags = compoundJson.flags;
                 
                 self.loaded = true;
                 if (callback) callback();
@@ -1251,6 +1278,15 @@ var Typo;
             var found = this._binarySearch(words, word);
             
             if (!found) {
+                // Check if this might be a compound word (using same logic as traditional mode)
+                if ("COMPOUNDMIN" in this.flags && word.length >= this.flags.COMPOUNDMIN) {
+                    for (var i = 0, _len = this.compoundRules.length; i < _len; i++) {
+                        if (word.match(this.compoundRules[i])) {
+                            return true;  // Valid compound word
+                        }
+                    }
+                }
+                
                 this.notFoundCache.add(word);
             }
             
@@ -1345,10 +1381,27 @@ var Typo;
             
             console.log('Export complete: ' + Object.keys(partitions).length + ' partitions');
             
+            // Export compound word rules and flags for full feature parity
+            var compoundData = {
+                compoundRules: [],
+                compoundRuleCodes: this.compoundRuleCodes,
+                flags: this.flags
+            };
+            
+            // Serialize RegExp objects to strings
+            for (var i = 0; i < this.compoundRules.length; i++) {
+                var rule = this.compoundRules[i];
+                compoundData.compoundRules.push({
+                    source: rule.source,
+                    flags: rule.flags
+                });
+            }
+            
             return {
                 index: index,
                 bloom: bloom.toJSON(),
-                partitions: partitionData
+                partitions: partitionData,
+                compound: compoundData
             };
         }
     };
