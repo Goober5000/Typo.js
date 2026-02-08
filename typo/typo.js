@@ -6,10 +6,138 @@
 /**
  * Typo is a JavaScript implementation of a spellchecker using hunspell-style
  * dictionaries.
+ * 
+ * ENHANCED VERSION: Supports both traditional .aff/.dic loading and pre-calculated
+ * paged word lists for large dictionaries.
  */
 var Typo;
 (function () {
     "use strict";
+    
+    /**
+     * Simple Bloom Filter implementation for fast negative lookups.
+     * Uses multiple hash functions to minimize false positives.
+     */
+    function BloomFilter(size, numHashes) {
+        this.size = size;
+        this.numHashes = numHashes || 3;
+        this.bits = new Uint8Array(Math.ceil(size / 8));
+    }
+    
+    BloomFilter.prototype = {
+        /**
+         * Add a word to the bloom filter
+         */
+        add: function(word) {
+            for (var i = 0; i < this.numHashes; i++) {
+                var hash = this._hash(word, i);
+                var bitIndex = hash % this.size;
+                var byteIndex = Math.floor(bitIndex / 8);
+                var bitOffset = bitIndex % 8;
+                this.bits[byteIndex] |= (1 << bitOffset);
+            }
+        },
+        
+        /**
+         * Check if a word might be in the set (may have false positives)
+         */
+        mightContain: function(word) {
+            for (var i = 0; i < this.numHashes; i++) {
+                var hash = this._hash(word, i);
+                var bitIndex = hash % this.size;
+                var byteIndex = Math.floor(bitIndex / 8);
+                var bitOffset = bitIndex % 8;
+                if ((this.bits[byteIndex] & (1 << bitOffset)) === 0) {
+                    return false; // Definitely not present
+                }
+            }
+            return true; // Might be present
+        },
+        
+        /**
+         * Simple hash function (DJB2 variant)
+         */
+        _hash: function(str, seed) {
+            var hash = 5381 + (seed * 1000);
+            for (var i = 0; i < str.length; i++) {
+                hash = ((hash << 5) + hash) + str.charCodeAt(i);
+                hash = hash & hash; // Convert to 32-bit integer
+            }
+            return Math.abs(hash);
+        },
+        
+        /**
+         * Export bloom filter to JSON-serializable format
+         */
+        toJSON: function() {
+            return {
+                size: this.size,
+                numHashes: this.numHashes,
+                bits: Array.from(this.bits)
+            };
+        },
+        
+        /**
+         * Create bloom filter from JSON data
+         */
+        fromJSON: function(data) {
+            this.size = data.size;
+            this.numHashes = data.numHashes;
+            this.bits = new Uint8Array(data.bits);
+            return this;
+        }
+    };
+    
+    /**
+     * Simple LRU cache for word partitions
+     */
+    function LRUCache(maxSize) {
+        this.maxSize = maxSize;
+        this.cache = {};
+        this.keys = []; // Ordered by access time (oldest first)
+    }
+    
+    LRUCache.prototype = {
+        get: function(key) {
+            if (this.cache.hasOwnProperty(key)) {
+                // Move to end (most recently used)
+                var index = this.keys.indexOf(key);
+                if (index !== -1) {
+                    this.keys.splice(index, 1);
+                }
+                this.keys.push(key);
+                return this.cache[key];
+            }
+            return null;
+        },
+        
+        set: function(key, value) {
+            // Add or update
+            if (!this.cache.hasOwnProperty(key)) {
+                this.keys.push(key);
+            } else {
+                // Move to end
+                var index = this.keys.indexOf(key);
+                if (index !== -1) {
+                    this.keys.splice(index, 1);
+                }
+                this.keys.push(key);
+            }
+            
+            this.cache[key] = value;
+            
+            // Evict oldest if over capacity
+            while (this.keys.length > this.maxSize) {
+                var oldestKey = this.keys.shift();
+                delete this.cache[oldestKey];
+            }
+        },
+        
+        has: function(key) {
+            return this.cache.hasOwnProperty(key);
+        }
+    };
+    
     /**
      * Typo constructor.
      *
@@ -20,7 +148,7 @@ var Typo;
      *                              file will be loaded automatically from
      *                              lib/typo/dictionaries/[dictionary]/[dictionary].aff
      *                              In other environments, it will be loaded from
-     *                              [settings.dictionaryPath]/dictionaries/[dictionary]/[dictionary].aff
+     *                              [settings.dictionaryPath]/dictionaries/[dictionary]/[dictionary].dic
      * @param {string} [wordsData]  The data from the dictionary's .dic file. If omitted
      *                              and Typo.js is being used in a Chrome extension, the .dic
      *                              file will be loaded automatically from
@@ -36,6 +164,10 @@ var Typo;
      *                              {Function} [loadedCallback]: Called when both affData and wordsData
      *                              have been loaded. Only used if asyncLoad is set to true. The parameter
      *                              is the instantiated Typo object.
+     *                              {boolean} [preCalculated]: If true, load from pre-calculated word lists
+     *                              instead of .aff/.dic files. Requires preCalculatedPath.
+     *                              {string} [preCalculatedPath]: Path to pre-calculated dictionary files.
+     *                              {number} [partitionCacheSize]: Number of partitions to keep in cache (default: 20)
      *
      * @returns {Typo} A Typo object.
      */
@@ -50,71 +182,75 @@ var Typo;
         this.flags = settings.flags || {};
         this.memoized = {};
         this.loaded = false;
+        
+        // Pre-calculated dictionary support
+        this.preCalculated = settings.preCalculated || false;
+        this.preCalculatedPath = settings.preCalculatedPath || null;
+        this.bloomFilter = null;
+        this.partitionIndex = null;
+        this.partitionCache = null;
+        this.notFoundCache = new Set(); // Cache for words we've already rejected
+        
+        if (this.preCalculated) {
+            this.partitionCache = new LRUCache(settings.partitionCacheSize || 20);
+        }
+        
         var self = this;
         var path;
         // Loop-control variables.
         var i, j, _len, _jlen;
         if (dictionary) {
             self.dictionary = dictionary;
+            
+            // PRE-CALCULATED MODE: Load from pre-calculated files
+            if (self.preCalculated && self.preCalculatedPath) {
+                if (settings.asyncLoad) {
+                    self._loadPreCalculatedAsync(function() {
+                        if (settings.loadedCallback) {
+                            settings.loadedCallback(self);
+                        }
+                    });
+                } else {
+                    self._loadPreCalculated();
+                }
+                return this;
+            }
+            
+            // TRADITIONAL MODE: Load from .aff/.dic files
             // If the data is preloaded, just setup the Typo object.
             if (affData && wordsData) {
                 setup();
             }
-            // Loading data for browser extentions.
+            // Loading data for browser extensions.
             else if (typeof window !== 'undefined' && ((window.chrome && window.chrome.runtime) || (window.browser && window.browser.runtime))) {
                 var runtime = window.chrome && window.chrome.runtime ? window.chrome.runtime : window.browser.runtime;
-                if (settings.dictionaryPath) {
-                    path = settings.dictionaryPath;
-                }
-                else {
-                    path = "typo/dictionaries";
-                }
+                path = "typo/dictionaries/" + dictionary + "/" + dictionary;
                 if (!affData)
-                    readDataFile(runtime.getURL(path + "/" + dictionary + "/" + dictionary + ".aff"), setAffData);
+                    affData = self._readFile(runtime.getURL(path + ".aff"));
                 if (!wordsData)
-                    readDataFile(runtime.getURL(path + "/" + dictionary + "/" + dictionary + ".dic"), setWordsData);
-            }
-            // Loading data for Node.js or other environments.
-            else {
-                if (settings.dictionaryPath) {
-                    path = settings.dictionaryPath;
-                }
-                else if (typeof __dirname !== 'undefined') {
-                    path = __dirname + '/dictionaries';
-                }
-                else {
-                    path = './dictionaries';
-                }
-                if (!affData)
-                    readDataFile(path + "/" + dictionary + "/" + dictionary + ".aff", setAffData);
-                if (!wordsData)
-                    readDataFile(path + "/" + dictionary + "/" + dictionary + ".dic", setWordsData);
-            }
-        }
-        function readDataFile(url, setFunc) {
-            var response = self._readFile(url, null, settings === null || settings === void 0 ? void 0 : settings.asyncLoad);
-            if (settings === null || settings === void 0 ? void 0 : settings.asyncLoad) {
-                response.then(function (data) {
-                    setFunc(data);
-                });
-            }
-            else {
-                setFunc(response);
-            }
-        }
-        function setAffData(data) {
-            affData = data;
-            if (wordsData) {
+                    wordsData = self._readFile(runtime.getURL(path + ".dic"));
                 setup();
             }
-        }
-        function setWordsData(data) {
-            wordsData = data;
-            if (affData) {
-                setup();
+            else if (typeof require !== 'undefined') {
+                // Node.js
+                path = settings.dictionaryPath || '';
+                if (!affData)
+                    affData = self._readFile(path + "/" + dictionary + "/" + dictionary + ".aff", null, settings.asyncLoad);
+                if (!wordsData)
+                    wordsData = self._readFile(path + "/" + dictionary + "/" + dictionary + ".dic", null, settings.asyncLoad);
+                if (settings.asyncLoad) {
+                    Promise.all([affData, wordsData]).then(function (results) {
+                        setup(results[0], results[1]);
+                    });
+                }
+                else {
+                    setup(affData, wordsData);
+                }
             }
         }
-        function setup() {
+        function setup(aff, words) {
+            affData = aff || affData;
+            wordsData = words || wordsData;
             self.rules = self._parseAFF(affData);
             // Save the rule codes that are used in compound rules.
             self.compoundRuleCodes = {};
@@ -124,14 +260,14 @@ var Typo;
                     self.compoundRuleCodes[rule[j]] = [];
                 }
             }
-            // If we add this ONLYINCOMPOUND flag to self.compoundRuleCodes, then _parseDIC
-            // will do the work of saving the list of words that are compound-only.
-            if ("ONLYINCOMPOUND" in self.flags) {
-                self.compoundRuleCodes[self.flags.ONLYINCOMPOUND] = [];
+            // If we add this AFTER the general matching rule, we can access it from the match key.
+            if ("COMPOUNDRULE" in self.flags) {
+                self.compoundRuleCodes[self.flags.COMPOUNDRULE] = [];
             }
+            // Now do the dictionary parsing (this is the part that is slow)
             self.dictionaryTable = self._parseDIC(wordsData);
             // Get rid of any codes from the compound rule codes that are never used
-            // (or that were special regex characters).  Not especially necessary...
+            // (or that were special regex characters).
             for (i in self.compoundRuleCodes) {
                 if (self.compoundRuleCodes[i].length === 0) {
                     delete self.compoundRuleCodes[i];
@@ -675,6 +811,13 @@ var Typo;
             if (!this.loaded) {
                 throw "Dictionary not loaded.";
             }
+            
+            // PRE-CALCULATED MODE: Use bloom filter + paging
+            if (this.preCalculated) {
+                return this._checkPreCalculated(word);
+            }
+            
+            // TRADITIONAL MODE: Use dictionaryTable
             var ruleCodes = this.dictionaryTable[word];
             var i, _len;
             if (typeof ruleCodes === 'undefined') {
@@ -950,6 +1093,263 @@ var Typo;
                 'limit': limit
             };
             return this.memoized[word]['suggestions'];
+        },
+        
+        /**
+         * ========================================================================
+         * PRE-CALCULATED DICTIONARY METHODS
+         * ========================================================================
+         */
+        
+        /**
+         * Enhanced checkExact that supports both traditional and pre-calculated modes
+         * @param {string} word The word to check
+         * @returns {boolean|Promise<boolean>} True if word exists (or Promise in async mode)
+         */
+        checkExactEnhanced: function(word) {
+            if (!this.loaded) {
+                throw "Dictionary not loaded.";
+            }
+            
+            // PRE-CALCULATED MODE
+            if (this.preCalculated) {
+                return this._checkPreCalculated(word);
+            }
+            
+            // TRADITIONAL MODE - use original logic
+            return this.checkExact(word);
+        },
+        
+        /**
+         * Load pre-calculated dictionary from JSON files (synchronous)
+         * @private
+         */
+        _loadPreCalculated: function() {
+            var self = this;
+            var basePath = this.preCalculatedPath + '/' + this.dictionary;
+            
+            // Load index
+            var indexData = this._readFile(basePath + '/index.json');
+            var index = JSON.parse(indexData);
+            this.partitionIndex = index.partitions;
+            
+            // Load and initialize bloom filter
+            var bloomData = this._readFile(basePath + '/bloom.json');
+            var bloomJson = JSON.parse(bloomData);
+            this.bloomFilter = new BloomFilter(bloomJson.size, bloomJson.numHashes);
+            this.bloomFilter.fromJSON(bloomJson);
+            
+            this.loaded = true;
+        },
+        
+        /**
+         * Load pre-calculated dictionary from JSON files (asynchronous)
+         * @private
+         */
+        _loadPreCalculatedAsync: function(callback) {
+            var self = this;
+            var basePath = this.preCalculatedPath + '/' + this.dictionary;
+            
+            // Load index
+            var indexPromise = this._readFile(basePath + '/index.json', 'utf8', true);
+            var bloomPromise = this._readFile(basePath + '/bloom.json', 'utf8', true);
+            
+            Promise.all([indexPromise, bloomPromise]).then(function(results) {
+                var index = JSON.parse(results[0]);
+                self.partitionIndex = index.partitions;
+                
+                var bloomJson = JSON.parse(results[1]);
+                self.bloomFilter = new BloomFilter(bloomJson.size, bloomJson.numHashes);
+                self.bloomFilter.fromJSON(bloomJson);
+                
+                self.loaded = true;
+                if (callback) callback();
+            }).catch(function(error) {
+                console.error('Failed to load pre-calculated dictionary:', error);
+                throw error;
+            });
+        },
+        
+        /**
+         * Load a word partition from file (with caching)
+         * @param {string} prefix - The partition prefix (e.g., "ab", "he")
+         * @returns {Array} Array of words in this partition
+         * @private
+         */
+        _loadPartition: function(prefix) {
+            // Check cache first
+            if (this.partitionCache.has(prefix)) {
+                return this.partitionCache.get(prefix);
+            }
+            
+            // Load from file
+            var partitionInfo = this.partitionIndex[prefix];
+            if (!partitionInfo) {
+                return [];
+            }
+            
+            var basePath = this.preCalculatedPath + '/' + this.dictionary;
+            var partitionData = this._readFile(basePath + '/' + partitionInfo.file);
+            var partition = JSON.parse(partitionData);
+            
+            // Cache it
+            this.partitionCache.set(prefix, partition.words);
+            
+            return partition.words;
+        },
+        
+        /**
+         * Binary search for a word in a sorted array
+         * @param {Array} words - Sorted array of words
+         * @param {string} target - Word to find
+         * @returns {boolean} True if word found
+         * @private
+         */
+        _binarySearch: function(words, target) {
+            var left = 0;
+            var right = words.length - 1;
+            
+            while (left <= right) {
+                var mid = Math.floor((left + right) / 2);
+                var comparison = words[mid].localeCompare(target);
+                
+                if (comparison === 0) {
+                    return true;
+                } else if (comparison < 0) {
+                    left = mid + 1;
+                } else {
+                    right = mid - 1;
+                }
+            }
+            
+            return false;
+        },
+        
+        /**
+         * Check if a word exists in pre-calculated dictionary (synchronous)
+         * @param {string} word - Word to check
+         * @returns {boolean} True if word found
+         * @private
+         */
+        _checkPreCalculated: function(word) {
+            // Check negative cache first
+            if (this.notFoundCache.has(word)) {
+                return false;
+            }
+            
+            // Check bloom filter (fast rejection of misspellings)
+            if (!this.bloomFilter.mightContain(word)) {
+                this.notFoundCache.add(word);
+                return false;
+            }
+            
+            // Determine partition
+            var prefix = word.substring(0, 2).toLowerCase();
+            
+            // Load partition and search
+            var words = this._loadPartition(prefix);
+            var found = this._binarySearch(words, word);
+            
+            if (!found) {
+                this.notFoundCache.add(word);
+            }
+            
+            return found;
+        },
+        
+        /**
+         * Export the current dictionary as pre-calculated word lists
+         * This should be called after loading a traditional .aff/.dic dictionary
+         * 
+         * @returns {Object} Object containing all data needed for pre-calculated mode:
+         *   {
+         *     index: {...},        // Partition index
+         *     bloom: {...},        // Bloom filter data
+         *     partitions: {...}    // Map of prefix -> word array
+         *   }
+         */
+        exportPreCalculated: function() {
+            if (!this.loaded) {
+                throw "Dictionary must be loaded before exporting";
+            }
+            
+            if (this.preCalculated) {
+                throw "Cannot export a pre-calculated dictionary";
+            }
+            
+            // Collect all unique words from dictionaryTable
+            var allWords = [];
+            for (var word in this.dictionaryTable) {
+                if (this.dictionaryTable.hasOwnProperty(word)) {
+                    allWords.push(word);
+                }
+            }
+            
+            // Sort words
+            allWords.sort();
+            
+            var totalWords = allWords.length;
+            console.log('Exporting ' + totalWords + ' words...');
+            
+            // Create bloom filter (size = words * 10 bits, ~1% false positive rate)
+            var bloomSize = totalWords * 10;
+            var bloom = new BloomFilter(bloomSize, 3);
+            
+            // Add all words to bloom filter
+            for (var i = 0; i < allWords.length; i++) {
+                bloom.add(allWords[i]);
+            }
+            
+            // Partition words by first 2 characters
+            var partitions = {};
+            var partitionCounts = {};
+            
+            for (var i = 0; i < allWords.length; i++) {
+                var word = allWords[i];
+                var prefix = word.substring(0, 2).toLowerCase();
+                
+                if (!partitions[prefix]) {
+                    partitions[prefix] = [];
+                    partitionCounts[prefix] = 0;
+                }
+                
+                partitions[prefix].push(word);
+                partitionCounts[prefix]++;
+            }
+            
+            // Build index
+            var index = {
+                version: 1,
+                language: this.dictionary,
+                totalWords: totalWords,
+                partitionCount: Object.keys(partitions).length,
+                bloomFilterSize: bloomSize,
+                partitions: {}
+            };
+            
+            for (var prefix in partitionCounts) {
+                index.partitions[prefix] = {
+                    file: 'words/' + prefix + '.json',
+                    count: partitionCounts[prefix]
+                };
+            }
+            
+            // Prepare partition data
+            var partitionData = {};
+            for (var prefix in partitions) {
+                partitionData[prefix] = {
+                    prefix: prefix,
+                    words: partitions[prefix]
+                };
+            }
+            
+            console.log('Export complete: ' + Object.keys(partitions).length + ' partitions');
+            
+            return {
+                index: index,
+                bloom: bloom.toJSON(),
+                partitions: partitionData
+            };
         }
     };
 })();
