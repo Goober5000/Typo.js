@@ -1150,6 +1150,7 @@ var Typo;
             
             this.compoundRuleCodes = compoundJson.compoundRuleCodes;
             this.flags = compoundJson.flags;
+            this.replacementTable = compoundJson.replacementTable || [];  // For suggest() support
             
             // Load rules dictionary for hasFlag support
             var rulesData = this._readFile(basePath + '/rules.json');
@@ -1194,6 +1195,7 @@ var Typo;
                 
                 self.compoundRuleCodes = compoundJson.compoundRuleCodes;
                 self.flags = compoundJson.flags;
+                self.replacementTable = compoundJson.replacementTable || [];  // For suggest() support
                 
                 // Load rules dictionary for hasFlag support
                 self.rules = JSON.parse(results[3]);
@@ -1412,7 +1414,8 @@ var Typo;
             var compoundData = {
                 compoundRules: [],
                 compoundRuleCodes: this.compoundRuleCodes,
-                flags: this.flags
+                flags: this.flags,
+                replacementTable: this.replacementTable  // For suggest() support
             };
             
             // Serialize RegExp objects to strings
