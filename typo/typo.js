@@ -857,7 +857,24 @@ var Typo;
             }
             if (flag in this.flags) {
                 if (typeof wordFlags === 'undefined') {
-                    wordFlags = Array.prototype.concat.apply([], this.dictionaryTable.get(word));
+                    // Get word flags from appropriate source
+                    if (this.preCalculated) {
+                        // PRE-CALCULATED MODE: Use wordRulesCache
+                        // If word not in cache, load its partition
+                        if (!this.wordRulesCache.hasOwnProperty(word)) {
+                            var prefix = word.substring(0, 2).toLowerCase();
+                            this._loadPartition(prefix);  // This populates wordRulesCache
+                        }
+                        
+                        // Get rules from cache
+                        var rules = this.wordRulesCache[word];
+                        if (rules) {
+                            wordFlags = Array.prototype.concat.apply([], rules);
+                        }
+                    } else {
+                        // TRADITIONAL MODE: Use dictionaryTable
+						wordFlags = Array.prototype.concat.apply([], this.dictionaryTable.get(word));
+                    }
                 }
                 if (wordFlags && wordFlags.indexOf(this.flags[flag]) !== -1) {
                     return true;
@@ -1134,6 +1151,13 @@ var Typo;
             this.compoundRuleCodes = compoundJson.compoundRuleCodes;
             this.flags = compoundJson.flags;
             
+            // Load rules dictionary for hasFlag support
+            var rulesData = this._readFile(basePath + '/rules.json');
+            this.rules = JSON.parse(rulesData);
+            
+            // Initialize word->rules cache (populated as partitions are loaded)
+            this.wordRulesCache = {};
+            
             this.loaded = true;
         },
         
@@ -1145,12 +1169,13 @@ var Typo;
             var self = this;
             var basePath = this.preCalculatedPath + '/' + this.dictionary;
             
-            // Load index, bloom filter, and compound data
+            // Load index, bloom filter, compound data, and rules
             var indexPromise = this._readFile(basePath + '/index.json', 'utf8', true);
             var bloomPromise = this._readFile(basePath + '/bloom.json', 'utf8', true);
             var compoundPromise = this._readFile(basePath + '/compound.json', 'utf8', true);
+            var rulesPromise = this._readFile(basePath + '/rules.json', 'utf8', true);
             
-            Promise.all([indexPromise, bloomPromise, compoundPromise]).then(function(results) {
+            Promise.all([indexPromise, bloomPromise, compoundPromise, rulesPromise]).then(function(results) {
                 var index = JSON.parse(results[0]);
                 self.partitionIndex = index.partitions;
                 
@@ -1170,6 +1195,12 @@ var Typo;
                 self.compoundRuleCodes = compoundJson.compoundRuleCodes;
                 self.flags = compoundJson.flags;
                 
+                // Load rules dictionary for hasFlag support
+                self.rules = JSON.parse(results[3]);
+                
+                // Initialize word->rules cache (populated as partitions are loaded)
+                self.wordRulesCache = {};
+                
                 self.loaded = true;
                 if (callback) callback();
             }).catch(function(error) {
@@ -1181,7 +1212,7 @@ var Typo;
         /**
          * Load a word partition from file (with caching)
          * @param {string} prefix - The partition prefix (e.g., "ab", "he")
-         * @returns {Array} Array of words in this partition
+         * @returns {Array} Array of word objects {w: word, r: rules} in this partition
          * @private
          */
         _loadPartition: function(prefix) {
@@ -1200,15 +1231,21 @@ var Typo;
             var partitionData = this._readFile(basePath + '/' + partitionInfo.file);
             var partition = JSON.parse(partitionData);
             
-            // Cache it
+            // Populate word rules cache for hasFlag support
+            for (var i = 0; i < partition.words.length; i++) {
+                var wordData = partition.words[i];
+                this.wordRulesCache[wordData.w] = wordData.r;
+            }
+            
+            // Cache partition
             this.partitionCache.set(prefix, partition.words);
             
             return partition.words;
         },
         
         /**
-         * Binary search for a word in a sorted array
-         * @param {Array} words - Sorted array of words
+         * Binary search for a word in a sorted array of word objects
+         * @param {Array} words - Sorted array of word objects {w: word, r: rules}
          * @param {string} target - Word to find
          * @returns {boolean} True if word found
          * @private
@@ -1219,7 +1256,8 @@ var Typo;
             
             while (left <= right) {
                 var mid = Math.floor((left + right) / 2);
-                var comparison = words[mid].localeCompare(target);
+                var wordData = words[mid];
+                var comparison = wordData.w.localeCompare(target);
                 
                 if (comparison === 0) {
                     return true;
@@ -1294,17 +1332,22 @@ var Typo;
                 throw "Cannot export a pre-calculated dictionary";
             }
             
-            // Collect all unique words from dictionaryTable
+            // Collect all unique words from dictionaryTable with their rule codes
             var allWords = [];
             this.dictionaryTable.forEach(function(rules, word) {
-                allWords.push(word);
+                allWords.push({
+                    word: word,
+                    rules: rules  // null or array of rule arrays
+                });
             });
             
-            // Sort words
-            allWords.sort();
+            // Sort words alphabetically
+            allWords.sort(function(a, b) {
+                return a.word.localeCompare(b.word);
+            });
             
             var totalWords = allWords.length;
-            console.log('Exporting ' + totalWords + ' words...');
+            console.log('Exporting ' + totalWords + ' words with rule codes...');
             
             // Create bloom filter (size = words * 10 bits, ~1% false positive rate)
             var bloomSize = totalWords * 10;
@@ -1312,7 +1355,7 @@ var Typo;
             
             // Add all words to bloom filter
             for (var i = 0; i < allWords.length; i++) {
-                bloom.add(allWords[i]);
+                bloom.add(allWords[i].word);
             }
             
             // Partition words by first 2 characters
@@ -1320,7 +1363,8 @@ var Typo;
             var partitionCounts = {};
             
             for (var i = 0; i < allWords.length; i++) {
-                var word = allWords[i];
+                var wordData = allWords[i];
+                var word = wordData.word;
                 var prefix = word.substring(0, 2).toLowerCase();
                 
                 if (!partitions[prefix]) {
@@ -1328,7 +1372,11 @@ var Typo;
                     partitionCounts[prefix] = 0;
                 }
                 
-                partitions[prefix].push(word);
+                // Store word with its rule codes
+                partitions[prefix].push({
+                    w: word,           // word
+                    r: wordData.rules  // rules (null or array)
+                });
                 partitionCounts[prefix]++;
             }
             
@@ -1354,7 +1402,7 @@ var Typo;
             for (var prefix in partitions) {
                 partitionData[prefix] = {
                     prefix: prefix,
-                    words: partitions[prefix]
+                    words: partitions[prefix]  // Array of {w: word, r: rules}
                 };
             }
             
@@ -1380,7 +1428,8 @@ var Typo;
                 index: index,
                 bloom: bloom.toJSON(),
                 partitions: partitionData,
-                compound: compoundData
+                compound: compoundData,
+                rules: this.rules  // Export rules dictionary for hasFlag
             };
         }
     };
