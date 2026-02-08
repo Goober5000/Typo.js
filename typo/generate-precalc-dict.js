@@ -100,6 +100,11 @@ const bloomPath = path.join(langOutputPath, 'bloom.json');
 fs.writeFileSync(bloomPath, JSON.stringify(exported.bloom, null, 2));
 console.log('  ✓ Written bloom.json');
 
+// Write compound rules file
+const compoundPath = path.join(langOutputPath, 'compound.json');
+fs.writeFileSync(compoundPath, JSON.stringify(exported.compound, null, 2));
+console.log('  ✓ Written compound.json');
+
 // Write partition files
 let partitionCount = 0;
 let totalBytes = 0;
@@ -126,6 +131,7 @@ console.log('');
 console.log('Files generated:');
 console.log('  - index.json       (partition index)');
 console.log('  - bloom.json       (bloom filter)');
+console.log('  - compound.json    (compound word rules)');
 console.log('  - words/*.json     (' + partitionCount + ' partition files)');
 console.log('');
 console.log('Usage in Typo.js:');
