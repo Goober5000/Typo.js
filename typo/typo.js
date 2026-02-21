@@ -89,52 +89,60 @@ var Typo;
     };
     
     /**
-     * Simple LRU cache for word partitions
+     * Efficient LRU cache using Map (maintains insertion order)
+     * All operations are O(1) amortized.
      */
     function LRUCache(maxSize) {
         this.maxSize = maxSize;
-        this.cache = {};
-        this.keys = []; // Ordered by access time (oldest first)
+        this.cache = new Map();
     }
     
     LRUCache.prototype = {
+        /**
+         * Get a value and mark it as recently used
+         */
         get: function(key) {
-            if (this.cache.hasOwnProperty(key)) {
-                // Move to end (most recently used)
-                var index = this.keys.indexOf(key);
-                if (index !== -1) {
-                    this.keys.splice(index, 1);
-                }
-                this.keys.push(key);
-                return this.cache[key];
+            if (!this.cache.has(key)) {
+                return null;
             }
-            return null;
+            // Move to end: delete and re-add to update position
+            var value = this.cache.get(key);
+            this.cache.delete(key);
+            this.cache.set(key, value);
+            return value;
         },
         
+        /**
+         * Set a value (adds or updates)
+         */
         set: function(key, value) {
-            // Add or update
-            if (!this.cache.hasOwnProperty(key)) {
-                this.keys.push(key);
-            } else {
-                // Move to end
-                var index = this.keys.indexOf(key);
-                if (index !== -1) {
-                    this.keys.splice(index, 1);
-                }
-                this.keys.push(key);
+            // If exists, delete first to update position
+            if (this.cache.has(key)) {
+                this.cache.delete(key);
             }
             
-            this.cache[key] = value;
+            this.cache.set(key, value);
             
             // Evict oldest if over capacity
-            while (this.keys.length > this.maxSize) {
-                var oldestKey = this.keys.shift();
-                delete this.cache[oldestKey];
+            if (this.cache.size > this.maxSize) {
+                // Map.keys().next().value gives the oldest (first inserted) key
+                var oldestKey = this.cache.keys().next().value;
+                this.cache.delete(oldestKey);
             }
         },
         
+        /**
+         * Check if key exists (without updating access order)
+         */
         has: function(key) {
-            return this.cache.hasOwnProperty(key);
+            return this.cache.has(key);
+        },
+        
+        /**
+         * Add a key with a trivial value (for Set-like usage)
+         */
+        add: function(key) {
+            this.set(key, true);
         }
     };
     
@@ -189,10 +197,11 @@ var Typo;
         this.bloomFilter = null;
         this.partitionIndex = null;
         this.partitionCache = null;
-        this.notFoundCache = new Set(); // Cache for words we've already rejected
+        this.notFoundCache = null;
         
         if (this.preCalculated) {
             this.partitionCache = new LRUCache(settings.partitionCacheSize || 20);
+            this.notFoundCache = new LRUCache(settings.notFoundCacheSize || 10000);
         }
         
         var self = this;
@@ -859,15 +868,10 @@ var Typo;
                 if (typeof wordFlags === 'undefined') {
                     // Get word flags from appropriate source
                     if (this.preCalculated) {
-                        // PRE-CALCULATED MODE: Use wordRulesCache
-                        // If word not in cache, load its partition
-                        if (!this.wordRulesCache.hasOwnProperty(word)) {
-                            var prefix = word.substring(0, 2).toLowerCase();
-                            this._loadPartition(prefix);  // This populates wordRulesCache
-                        }
-                        
-                        // Get rules from cache
-                        var rules = this.wordRulesCache[word];
+                        // PRE-CALCULATED MODE: Load partition and find word's rules
+                        var prefix = word.substring(0, 2).toLowerCase();
+                        var words = this._loadPartition(prefix);  // Uses LRU cache
+                        var rules = this._findWordRules(words, word);
                         if (rules) {
                             wordFlags = Array.prototype.concat.apply([], rules);
                         }
@@ -1175,9 +1179,6 @@ var Typo;
             var rulesData = this._readFile(basePath + '/rules.json');
             this.rules = JSON.parse(rulesData);
             
-            // Initialize word->rules cache (populated as partitions are loaded)
-            this.wordRulesCache = {};
-            
             this.loaded = true;
         },
         
@@ -1219,9 +1220,6 @@ var Typo;
                 // Load rules dictionary for hasFlag support
                 self.rules = JSON.parse(results[3]);
                 
-                // Initialize word->rules cache (populated as partitions are loaded)
-                self.wordRulesCache = {};
-                
                 self.loaded = true;
                 if (callback) callback();
             }).catch(function(error) {
@@ -1251,12 +1249,6 @@ var Typo;
             var basePath = this.preCalculatedPath + '/' + this.dictionary;
             var partitionData = this._readFile(basePath + '/' + partitionInfo.file);
             var partition = JSON.parse(partitionData);
-            
-            // Populate word rules cache for hasFlag support
-            for (var i = 0; i < partition.words.length; i++) {
-                var wordData = partition.words[i];
-                this.wordRulesCache[wordData.w] = wordData.r;
-            }
             
             // Cache partition
             this.partitionCache.set(prefix, partition.words);
@@ -1290,6 +1282,34 @@ var Typo;
             }
             
             return false;
+        },
+        
+        /**
+         * Binary search to find a word's rule codes in a sorted partition
+         * @param {Array} words - Sorted array of word objects {w: word, r: rules}
+         * @param {string} target - Word to find
+         * @returns {Array|null} Rule codes array if found, null otherwise
+         * @private
+         */
+        _findWordRules: function(words, target) {
+            var left = 0;
+            var right = words.length - 1;
+            
+            while (left <= right) {
+                var mid = Math.floor((left + right) / 2);
+                var wordData = words[mid];
+                var comparison = wordData.w.localeCompare(target);
+                
+                if (comparison === 0) {
+                    return wordData.r;  // Return rules (may be null)
+                } else if (comparison < 0) {
+                    left = mid + 1;
+                } else {
+                    right = mid - 1;
+                }
+            }
+            
+            return null;  // Word not found
         },
         
         /**
