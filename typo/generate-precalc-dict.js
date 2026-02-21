@@ -9,7 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const Typo = require('./typo-precalc.js');
+const Typo = require('./typo.js');
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -47,10 +47,30 @@ if (!fs.existsSync(dicPath)) {
 }
 
 const affData = fs.readFileSync(affPath, 'utf8');
-const dicData = fs.readFileSync(dicPath, 'utf8');
+let dicData = fs.readFileSync(dicPath, 'utf8');
 
 console.log('  ✓ Loaded .aff file:', affPath);
 console.log('  ✓ Loaded .dic file:', dicPath);
+
+// Clean .dic file if it has comment lines (like Italian dictionary)
+const dicLines = dicData.split('\n');
+if (dicLines.length > 1 && dicLines[1].trim().startsWith('/')) {
+    console.log('  ⚠ Detected comment lines in .dic file - removing them...');
+    const originalLineCount = dicLines.length;
+    
+    const cleanedLines = dicLines.filter((line, index) => {
+        if (index === 0) return true;  // Keep word count line
+        const trimmed = line.trim();
+        return !trimmed.startsWith('/') && trimmed !== '';
+    });
+    
+    // Update word count
+    const actualWordCount = cleanedLines.length - 1;
+    cleanedLines[0] = actualWordCount.toString();
+    
+    console.log('  ✓ Removed', originalLineCount - cleanedLines.length, 'comment/empty lines');
+    dicData = cleanedLines.join('\n');
+}
 console.log('');
 
 // Create Typo instance and load dictionary
@@ -58,19 +78,40 @@ console.log('Step 2: Parsing dictionary and expanding words...');
 console.log('  (This may take several minutes for large dictionaries)');
 const startTime = Date.now();
 
-const dict = new Typo(language, affData, dicData);
+let dict;
+try {
+    dict = new Typo(language, affData, dicData);
+} catch (error) {
+    console.error('Error: Failed to parse dictionary');
+    console.error('  ' + (error.message || error));
+    process.exit(1);
+}
 
 const loadTime = ((Date.now() - startTime) / 1000).toFixed(2);
 console.log('  ✓ Dictionary loaded and expanded in ' + loadTime + 's');
 console.log('');
 
-// Export pre-calculated data
+// Export pre-calculated data with progress reporting
 console.log('Step 3: Exporting pre-calculated word lists...');
-const exported = dict.exportPreCalculated();
+
+let lastPhase = '';
+const exported = dict.exportPreCalculated(function(progress) {
+    if (progress.phase !== lastPhase) {
+        if (lastPhase) process.stdout.write('\n');
+        lastPhase = progress.phase;
+    }
+    
+    if (progress.phase === 'bloom' || progress.phase === 'partitioning') {
+        const percent = Math.round((progress.current / progress.total) * 100);
+        process.stdout.write(`\r  ${progress.phase}: ${percent}%`);
+    } else if (progress.phase === 'complete') {
+        process.stdout.write('\r  ✓ Export complete\n');
+    }
+});
 
 console.log('  ✓ Total words:', exported.index.totalWords.toLocaleString());
 console.log('  ✓ Partitions:', exported.index.partitionCount);
-console.log('  ✓ Bloom filter size:', (exported.bloom.bits.length).toLocaleString(), 'bytes');
+console.log('  ✓ Bloom filter size:', exported.bloom.bits.length.toLocaleString(), 'bytes');
 console.log('');
 
 // Create output directory structure
@@ -78,52 +119,54 @@ console.log('Step 4: Writing files to disk...');
 const langOutputPath = path.join(outputPath, language);
 const wordsOutputPath = path.join(langOutputPath, 'words');
 
-if (!fs.existsSync(outputPath)) {
-    fs.mkdirSync(outputPath, { recursive: true });
-}
+fs.mkdirSync(wordsOutputPath, { recursive: true });
 
-if (!fs.existsSync(langOutputPath)) {
-    fs.mkdirSync(langOutputPath, { recursive: true });
-}
-
-if (!fs.existsSync(wordsOutputPath)) {
-    fs.mkdirSync(wordsOutputPath, { recursive: true });
-}
-
-// Write index file
+// Write index file (pretty-printed for readability)
 const indexPath = path.join(langOutputPath, 'index.json');
 fs.writeFileSync(indexPath, JSON.stringify(exported.index, null, 2));
 console.log('  ✓ Written index.json');
 
-// Write bloom filter file
+// Write bloom filter file (compact - it's large)
 const bloomPath = path.join(langOutputPath, 'bloom.json');
-fs.writeFileSync(bloomPath, JSON.stringify(exported.bloom, null, 2));
-console.log('  ✓ Written bloom.json');
+fs.writeFileSync(bloomPath, JSON.stringify(exported.bloom));
+const bloomSize = fs.statSync(bloomPath).size;
+console.log('  ✓ Written bloom.json (' + (bloomSize / 1024).toFixed(1) + ' KB)');
 
-// Write compound rules file
+// Write compound rules file (pretty-printed for readability)
 const compoundPath = path.join(langOutputPath, 'compound.json');
 fs.writeFileSync(compoundPath, JSON.stringify(exported.compound, null, 2));
 console.log('  ✓ Written compound.json');
 
-// Write rules dictionary file
+// Write rules dictionary file (compact - can be large)
 const rulesPath = path.join(langOutputPath, 'rules.json');
-fs.writeFileSync(rulesPath, JSON.stringify(exported.rules, null, 2));
-console.log('  ✓ Written rules.json');
+fs.writeFileSync(rulesPath, JSON.stringify(exported.rules));
+const rulesSize = fs.statSync(rulesPath).size;
+console.log('  ✓ Written rules.json (' + (rulesSize / 1024).toFixed(1) + ' KB)');
 
-// Write partition files
+// Write partition files (compact to save space)
 let partitionCount = 0;
 let totalBytes = 0;
 for (const prefix in exported.partitions) {
     const partition = exported.partitions[prefix];
-    const partitionPath = path.join(langOutputPath, partition.file);
-    const json = JSON.stringify(partition, null, 2);
+    const partitionPath = path.join(wordsOutputPath, prefix + '.json');
+    const json = JSON.stringify(partition);  // Compact JSON
     fs.writeFileSync(partitionPath, json);
     partitionCount++;
     totalBytes += json.length;
+    
+    // Progress indicator for partition writing
+    if (partitionCount % 50 === 0) {
+        process.stdout.write(`\r  Writing partitions: ${partitionCount}...`);
+    }
 }
-console.log('  ✓ Written ' + partitionCount + ' partition files');
-console.log('  ✓ Total size:', (totalBytes / 1024 / 1024).toFixed(2), 'MB');
+process.stdout.write(`\r  ✓ Written ${partitionCount} partition files\n`);
+console.log('  ✓ Total partition size:', (totalBytes / 1024 / 1024).toFixed(2), 'MB');
 console.log('');
+
+// Calculate total output size
+let totalSize = bloomSize + rulesSize + totalBytes;
+totalSize += fs.statSync(indexPath).size;
+totalSize += fs.statSync(compoundPath).size;
 
 // Generate summary
 const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -131,6 +174,7 @@ console.log('='.repeat(70));
 console.log('COMPLETE!');
 console.log('='.repeat(70));
 console.log('Output directory:', langOutputPath);
+console.log('Total output size:', (totalSize / 1024 / 1024).toFixed(2), 'MB');
 console.log('Total processing time:', totalTime + 's');
 console.log('');
 console.log('Files generated:');
