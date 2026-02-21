@@ -869,7 +869,7 @@ var Typo;
                     // Get word flags from appropriate source
                     if (this.preCalculated) {
                         // PRE-CALCULATED MODE: Load partition and find word's rules
-                        var prefix = word.substring(0, 2).toLowerCase();
+                        var prefix = this._getPartitionPrefix(word);
                         var words = this._loadPartition(prefix);  // Uses LRU cache
                         var rules = this._findWordRules(words, word);
                         if (rules) {
@@ -1152,6 +1152,12 @@ var Typo;
             // Load index
             var indexData = this._readFile(basePath + '/index.json');
             var index = JSON.parse(indexData);
+            
+            // Version check
+            if (index.version !== 1) {
+                throw "Unsupported pre-calculated dictionary version: " + index.version + ". Expected version 1.";
+            }
+            
             this.partitionIndex = index.partitions;
             
             // Load and initialize bloom filter
@@ -1198,6 +1204,12 @@ var Typo;
             
             Promise.all([indexPromise, bloomPromise, compoundPromise, rulesPromise]).then(function(results) {
                 var index = JSON.parse(results[0]);
+                
+                // Version check
+                if (index.version !== 1) {
+                    throw "Unsupported pre-calculated dictionary version: " + index.version + ". Expected version 1.";
+                }
+                
                 self.partitionIndex = index.partitions;
                 
                 var bloomJson = JSON.parse(results[1]);
@@ -1313,6 +1325,22 @@ var Typo;
         },
         
         /**
+         * Get the partition prefix for a word.
+         * Always returns a 2-character prefix, padding single-character words with '_'.
+         * @param {string} word - The word to get the prefix for
+         * @returns {string} A 2-character lowercase prefix
+         * @private
+         */
+        _getPartitionPrefix: function(word) {
+            if (word.length >= 2) {
+                return word.substring(0, 2).toLowerCase();
+            } else {
+                // Pad single-character words with underscore
+                return ('_' + word).toLowerCase();
+            }
+        },
+        
+        /**
          * Check if a word exists in pre-calculated dictionary (synchronous)
          * @param {string} word - Word to check
          * @returns {boolean} True if word found
@@ -1331,7 +1359,7 @@ var Typo;
             }
             
             // Determine partition
-            var prefix = word.substring(0, 2).toLowerCase();
+            var prefix = this._getPartitionPrefix(word);
             
             // Load partition and search
             var words = this._loadPartition(prefix);
@@ -1357,6 +1385,9 @@ var Typo;
          * Export the current dictionary as pre-calculated word lists
          * This should be called after loading a traditional .aff/.dic dictionary
          * 
+         * @param {Function} [progressCallback] Optional callback for progress updates.
+         *        Called with object: { phase: string, current: number, total: number }
+         *        Phases: 'collecting', 'sorting', 'bloom', 'partitioning', 'complete'
          * @returns {Object} Object containing all data needed for pre-calculated mode:
          *   {
          *     index: {...},        // Partition index
@@ -1364,7 +1395,7 @@ var Typo;
          *     partitions: {...}    // Map of prefix -> word array
          *   }
          */
-        exportPreCalculated: function() {
+        exportPreCalculated: function(progressCallback) {
             if (!this.loaded) {
                 throw "Dictionary must be loaded before exporting";
             }
@@ -1373,7 +1404,15 @@ var Typo;
                 throw "Cannot export a pre-calculated dictionary";
             }
             
+            // Helper to report progress
+            var reportProgress = function(phase, current, total) {
+                if (progressCallback) {
+                    progressCallback({ phase: phase, current: current, total: total });
+                }
+            };
+            
             // Collect all unique words from dictionaryTable with their rule codes
+            reportProgress('collecting', 0, 1);
             var allWords = [];
             for (var word in this.dictionaryTable) {
                 if (this.dictionaryTable.hasOwnProperty(word)) {
@@ -1385,6 +1424,7 @@ var Typo;
             }
             
             // Sort words alphabetically
+            reportProgress('sorting', 0, 1);
             allWords.sort(function(a, b) {
                 return a.word.localeCompare(b.word);
             });
@@ -1396,19 +1436,23 @@ var Typo;
             var bloomSize = totalWords * 10;
             var bloom = new BloomFilter(bloomSize, 3);
             
-            // Add all words to bloom filter
+            // Add all words to bloom filter (with progress reporting)
             for (var i = 0; i < allWords.length; i++) {
                 bloom.add(allWords[i].word);
+                if (i % 10000 === 0) {
+                    reportProgress('bloom', i, totalWords);
+                }
             }
+            reportProgress('bloom', totalWords, totalWords);
             
-            // Partition words by first 2 characters
+            // Partition words by first 2 characters (with padding for single-char words)
             var partitions = {};
             var partitionCounts = {};
             
             for (var i = 0; i < allWords.length; i++) {
                 var wordData = allWords[i];
                 var word = wordData.word;
-                var prefix = word.substring(0, 2).toLowerCase();
+                var prefix = this._getPartitionPrefix(word);
                 
                 if (!partitions[prefix]) {
                     partitions[prefix] = [];
@@ -1421,7 +1465,12 @@ var Typo;
                     r: wordData.rules  // rules (null or array)
                 });
                 partitionCounts[prefix]++;
+                
+                if (i % 10000 === 0) {
+                    reportProgress('partitioning', i, totalWords);
+                }
             }
+            reportProgress('partitioning', totalWords, totalWords);
             
             // Build index
             var index = {
@@ -1467,6 +1516,8 @@ var Typo;
                     flags: rule.flags
                 });
             }
+            
+            reportProgress('complete', totalWords, totalWords);
             
             return {
                 index: index,
