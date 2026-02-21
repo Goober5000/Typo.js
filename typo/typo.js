@@ -15,6 +15,27 @@ var Typo;
     "use strict";
     
     /**
+     * Version of the pre-calculated dictionary format.
+     * Increment this when making breaking changes to the format.
+     */
+    var PRECALC_FORMAT_VERSION = 1;
+    
+    /**
+     * Compare two strings using Unicode code point order.
+     * This ensures consistent ordering across all JavaScript engines,
+     * regardless of system locale settings.
+     * 
+     * @param {string} a First string
+     * @param {string} b Second string
+     * @returns {number} -1 if a < b, 1 if a > b, 0 if equal
+     */
+    function compareStrings(a, b) {
+        if (a < b) return -1;
+        if (a > b) return 1;
+        return 0;
+    }
+    
+    /**
      * Simple Bloom Filter implementation for fast negative lookups.
      * Uses multiple hash functions to minimize false positives.
      */
@@ -1135,8 +1156,9 @@ var Typo;
             var index = JSON.parse(indexData);
             
             // Version check
-            if (index.version !== 1) {
-                throw "Unsupported pre-calculated dictionary version: " + index.version + ". Expected version 1.";
+            if (index.version !== PRECALC_FORMAT_VERSION) {
+                throw "Unsupported pre-calculated dictionary version: " + index.version + 
+                      ". Expected version " + PRECALC_FORMAT_VERSION + ".";
             }
             
             this.partitionIndex = index.partitions;
@@ -1187,8 +1209,9 @@ var Typo;
                 var index = JSON.parse(results[0]);
                 
                 // Version check
-                if (index.version !== 1) {
-                    throw "Unsupported pre-calculated dictionary version: " + index.version + ". Expected version 1.";
+                if (index.version !== PRECALC_FORMAT_VERSION) {
+                    throw "Unsupported pre-calculated dictionary version: " + index.version + 
+                          ". Expected version " + PRECALC_FORMAT_VERSION + ".";
                 }
                 
                 self.partitionIndex = index.partitions;
@@ -1263,7 +1286,7 @@ var Typo;
             while (left <= right) {
                 var mid = Math.floor((left + right) / 2);
                 var wordData = words[mid];
-                var comparison = wordData.w.localeCompare(target);
+                var comparison = compareStrings(wordData.w, target);
                 
                 if (comparison === 0) {
                     return true;
@@ -1291,7 +1314,7 @@ var Typo;
             while (left <= right) {
                 var mid = Math.floor((left + right) / 2);
                 var wordData = words[mid];
-                var comparison = wordData.w.localeCompare(target);
+                var comparison = compareStrings(wordData.w, target);
                 
                 if (comparison === 0) {
                     return wordData.r;  // Return rules (may be null)
@@ -1402,10 +1425,10 @@ var Typo;
                 });
             });
             
-            // Sort words alphabetically
+            // Sort words using Unicode code point order for consistency
             reportProgress('sorting', 0, 1);
             allWords.sort(function(a, b) {
-                return a.word.localeCompare(b.word);
+                return compareStrings(a.word, b.word);
             });
             
             var totalWords = allWords.length;
@@ -1453,7 +1476,7 @@ var Typo;
             
             // Build index
             var index = {
-                version: 1,
+                version: PRECALC_FORMAT_VERSION,
                 language: this.dictionary,
                 totalWords: totalWords,
                 partitionCount: Object.keys(partitions).length,
