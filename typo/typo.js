@@ -1490,7 +1490,6 @@ var Typo;
             });
             
             var totalWords = allWords.length;
-            console.log('Exporting ' + totalWords + ' words with rule codes...');
             
             // Create bloom filter (size = words * 10 bits, ~1% false positive rate)
             var bloomSize = totalWords * 10;
@@ -1557,8 +1556,6 @@ var Typo;
                     words: partitions[prefix]  // Array of {w: word, r: rules}
                 };
             }
-            
-            console.log('Export complete: ' + Object.keys(partitions).length + ' partitions');
             
             // Export compound word rules and flags for full feature parity
             var compoundData = {
