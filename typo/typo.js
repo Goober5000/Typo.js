@@ -197,6 +197,9 @@ var Typo;
      *                              instead of .aff/.dic files. Requires preCalculatedPath.
      *                              {string} [preCalculatedPath]: Path to pre-calculated dictionary files.
      *                              {number} [partitionCacheSize]: Number of partitions to keep in cache (default: 20)
+     *                              {Function} [loadingCallback]: Optional callback for reporting progress
+     *                              during traditional dictionary loading. Called with
+     *                              (phase, current, total) where phase is 'aff' or 'dic'.
      *
      * @returns {Typo} A Typo object.
      */
@@ -211,6 +214,7 @@ var Typo;
         this.flags = settings.flags || {};
         this.memoized = {};
         this.loaded = false;
+        this.loadingCallback = settings.loadingCallback || null;
         
         // Pre-calculated dictionary support
         this.preCalculated = settings.preCalculated || false;
@@ -409,6 +413,11 @@ var Typo;
             var line, subline, numEntries, lineParts;
             var i, j, _len, _jlen;
             var lines = data.split(/\r?\n/);
+            
+            if (this.loadingCallback) {
+                this.loadingCallback('aff', 0, lines.length);
+            }
+            
             for (i = 0, _len = lines.length; i < _len; i++) {
                 // Remove comment lines
                 line = this._removeAffixComments(lines[i]);
@@ -483,6 +492,11 @@ var Typo;
                     this.flags[ruleType] = definitionParts[1];
                 }
             }
+            
+            if (this.loadingCallback) {
+                this.loadingCallback('aff', lines.length, lines.length);
+            }
+            
             return rules;
         },
         /**
@@ -650,6 +664,13 @@ var Typo;
             data = this._removeDicComments(data);
             var lines = data.split(/\r?\n/);
             var dictionaryTable = {};
+            
+            // Total entries (line 0 is the word count header)
+            var totalEntries = lines.length - 1;
+            
+            if (this.loadingCallback) {
+                this.loadingCallback('dic', 0, totalEntries);
+            }
 
             // The first line is the number of words in the dictionary.
             // We skip it and start at line 1.
@@ -686,6 +707,14 @@ var Typo;
                     // Word has no affix rules - add it as-is
                     this._addWordToDictionary(dictionaryTable, word.trim(), []);
                 }
+                
+                if (this.loadingCallback && (i % 1000 === 0)) {
+                    this.loadingCallback('dic', i, totalEntries);
+                }
+            }
+            
+            if (this.loadingCallback) {
+                this.loadingCallback('dic', totalEntries, totalEntries);
             }
 
             return dictionaryTable;
