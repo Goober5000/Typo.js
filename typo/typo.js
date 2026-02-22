@@ -200,6 +200,9 @@ var Typo;
      *                              {Function} [loadingCallback]: Optional callback for reporting progress
      *                              during traditional dictionary loading. Called with
      *                              (phase, current, total) where phase is 'aff' or 'dic'.
+     *                              {Function} [testRegex]: Optional function(regex, string) returning boolean.
+     *                              Replaces the default regex test in affix rule matching.
+     *                              Can be used to substitute an alternative regex engine such as RE2.
      *
      * @returns {Typo} A Typo object.
      */
@@ -215,6 +218,9 @@ var Typo;
         this.memoized = {};
         this.loaded = false;
         this.loadingCallback = settings.loadingCallback || null;
+        this._testRegex = settings.testRegex || function(regex, string) {
+            return regex.test(string);
+        };
         
         // Pre-calculated dictionary support
         this.preCalculated = settings.preCalculated || false;
@@ -775,7 +781,7 @@ var Typo;
             var newWords = [];
             for (var i = 0, _len = entries.length; i < _len; i++) {
                 var entry = entries[i];
-                if (!entry.match || word.match(entry.match)) {
+                if (!entry.match || this._testRegex(entry.match, word)) {
                     var newWord = word;
                     if (entry.remove) {
                         newWord = newWord.replace(entry.remove, "");

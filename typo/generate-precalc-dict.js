@@ -5,6 +5,8 @@
  * 
  * Usage: node generate-precalc-dict.js <language> <input-path> <output-path>
  * Example: node generate-precalc-dict.js it_IT ./dictionaries ./precalc-dicts
+ * 
+ * Requires: npm install re2
  */
 
 const fs = require('fs');
@@ -22,6 +24,19 @@ if (args.length < 3) {
 const language = args[0];
 const inputPath = args[1];
 const outputPath = args[2];
+
+// Load re2 for backtrack-proof regex matching
+let RE2;
+try {
+    RE2 = require('re2');
+    console.log('✓ Loaded re2 for backtrack-proof regex matching');
+} catch (e) {
+    console.warn('⚠ re2 not found (npm install re2)');
+    console.warn('  Falling back to native regex — some dictionaries may freeze on');
+    console.warn('  pathological patterns. The expansion and depth limits will still apply.');
+    RE2 = null;
+}
+console.log('');
 
 console.log('='.repeat(70));
 console.log('Generating Pre-Calculated Dictionary');
@@ -73,6 +88,48 @@ if (dicLines.length > 1 && dicLines[1].trim().startsWith('/')) {
 }
 console.log('');
 
+// Build Typo constructor settings
+var typoSettings = {
+    loadingCallback: function(phase, current, total) {
+        if (phase === 'aff') {
+            if (current === 0) {
+                process.stdout.write('  Parsing affix rules...');
+            } else {
+                process.stdout.write(' done\n');
+            }
+        } else if (phase === 'dic') {
+            if (total > 0) {
+                const percent = Math.round((current / total) * 100);
+                process.stdout.write('\r  Expanding dictionary: ' + percent + '% (' + current.toLocaleString() + '/' + total.toLocaleString() + ' entries)');
+                if (current === total) {
+                    process.stdout.write('\n');
+                }
+            }
+        }
+    }
+};
+
+// Use re2 for backtrack-proof regex matching if available.
+// RE2 guarantees linear-time matching, eliminating catastrophic backtracking
+// entirely at the engine level.  A cache converts each native RegExp to an
+// RE2 instance on first encounter; subsequent calls are a simple Map lookup.
+if (RE2) {
+    var re2Cache = new Map();
+    typoSettings.testRegex = function(regex, string) {
+        var re2 = re2Cache.get(regex);
+        if (!re2) {
+            try {
+                re2 = new RE2(regex.source, regex.flags);
+            } catch (e) {
+                // If RE2 can't handle the pattern, fall back to the native object
+                re2 = regex;
+            }
+            re2Cache.set(regex, re2);
+        }
+        return re2.test(string);
+    };
+}
+
 // Create Typo instance and load dictionary
 console.log('Step 2: Parsing dictionary and expanding words...');
 console.log('  (This may take several minutes for large dictionaries)');
@@ -80,25 +137,7 @@ const startTime = Date.now();
 
 let dict;
 try {
-    dict = new Typo(language, affData, dicData, {
-        loadingCallback: function(phase, current, total) {
-            if (phase === 'aff') {
-                if (current === 0) {
-                    process.stdout.write('  Parsing affix rules...');
-                } else {
-                    process.stdout.write(' done\n');
-                }
-            } else if (phase === 'dic') {
-                if (total > 0) {
-                    const percent = Math.round((current / total) * 100);
-                    process.stdout.write('\r  Expanding dictionary: ' + percent + '% (' + current.toLocaleString() + '/' + total.toLocaleString() + ' entries)');
-                    if (current === total) {
-                        process.stdout.write('\n');
-                    }
-                }
-            }
-        }
-    });
+    dict = new Typo(language, affData, dicData, typoSettings);
 } catch (error) {
     console.error('Error: Failed to parse dictionary');
     console.error('  ' + (error.message || error));

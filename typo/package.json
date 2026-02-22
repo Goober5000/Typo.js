@@ -27,5 +27,8 @@
   "devDependencies": {
     "@types/chrome": "^0.0.268",
     "@types/node": "^20.12.12"
+  },
+  "dependencies": {
+    "re2": "^1.23.3"
   }
 }
