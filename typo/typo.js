@@ -708,7 +708,7 @@ var Typo;
                     this._addWordToDictionary(dictionaryTable, word.trim(), []);
                 }
                 
-                if (this.loadingCallback && (i % 1000 === 0)) {
+                if (this.loadingCallback && (i % 10 === 0)) {
                     this.loadingCallback('dic', i, totalEntries);
                 }
             }
