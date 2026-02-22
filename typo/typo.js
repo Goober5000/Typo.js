@@ -831,65 +831,6 @@ var Typo;
             }
             return false;
         },
-        
-        /**
-         * Checks whether a word or a capitalization variant exists in the current dictionary (asynchronous).
-         * Use this method in browser environments with pre-calculated dictionaries.
-         *
-         * @param {string} aWord The word to check.
-         * @returns {Promise<boolean>}
-         */
-        checkAsync: function (aWord) {
-            var self = this;
-            
-            if (!this.loaded) {
-                return Promise.reject("Dictionary not loaded.");
-            }
-            
-            if (!aWord) {
-                return Promise.resolve(false);
-            }
-            
-            // Remove leading and trailing whitespace
-            var trimmedWord = aWord.replace(/^\s\s*/, '').replace(/\s\s*$/, '');
-            
-            return this.checkExactAsync(trimmedWord).then(function(found) {
-                if (found) {
-                    return true;
-                }
-                
-                // The exact word is not in the dictionary.
-                if (trimmedWord.toUpperCase() === trimmedWord) {
-                    // The word was supplied in all uppercase.
-                    var capitalizedWord = trimmedWord[0] + trimmedWord.substring(1).toLowerCase();
-                    
-                    return self.hasFlagAsync(capitalizedWord, "KEEPCASE").then(function(hasKeepcase) {
-                        if (hasKeepcase) {
-                            return false;
-                        }
-                        return self.checkExactAsync(capitalizedWord);
-                    }).then(function(found) {
-                        if (found) {
-                            return true;
-                        }
-                        return self.checkExactAsync(trimmedWord.toLowerCase());
-                    });
-                }
-                
-                var uncapitalizedWord = trimmedWord[0].toLowerCase() + trimmedWord.substring(1);
-                if (uncapitalizedWord !== trimmedWord) {
-                    return self.hasFlagAsync(uncapitalizedWord, "KEEPCASE").then(function(hasKeepcase) {
-                        if (hasKeepcase) {
-                            return false;
-                        }
-                        return self.checkExactAsync(uncapitalizedWord);
-                    });
-                }
-                
-                return false;
-            });
-        },
-        
         /**
          * Checks whether a word exists in the current dictionary.
          *
@@ -933,28 +874,6 @@ var Typo;
             }
             return false;
         },
-        
-        /**
-         * Checks whether a word exists in the current dictionary (asynchronous).
-         * Use this method in browser environments with pre-calculated dictionaries.
-         *
-         * @param {string} word The word to check.
-         * @returns {Promise<boolean>}
-         */
-        checkExactAsync: function (word) {
-            if (!this.loaded) {
-                return Promise.reject("Dictionary not loaded.");
-            }
-            
-            // PRE-CALCULATED MODE: Use async partition loading
-            if (this.preCalculated) {
-                return this._checkPreCalculatedAsync(word);
-            }
-            
-            // TRADITIONAL MODE: Wrap sync result in Promise
-            return Promise.resolve(this.checkExact(word));
-        },
-        
         /**
          * Looks up whether a given word is flagged with a given flag.
          *
@@ -988,59 +907,11 @@ var Typo;
             }
             return false;
         },
-        
-        /**
-         * Looks up whether a given word is flagged with a given flag (asynchronous).
-         * Use this method in browser environments with pre-calculated dictionaries.
-         *
-         * @param {string} word The word in question.
-         * @param {string} flag The flag in question.
-         * @param {Array} [wordFlags] Optional pre-loaded word flags.
-         * @return {Promise<boolean>}
-         */
-        hasFlagAsync: function (word, flag, wordFlags) {
-            var self = this;
-            
-            if (!this.loaded) {
-                return Promise.reject("Dictionary not loaded.");
-            }
-            
-            if (!(flag in this.flags)) {
-                return Promise.resolve(false);
-            }
-            
-            if (typeof wordFlags !== 'undefined') {
-                // wordFlags already provided
-                var hasIt = wordFlags && wordFlags.indexOf(this.flags[flag]) !== -1;
-                return Promise.resolve(hasIt);
-            }
-            
-            // Get word flags from appropriate source
-            if (this.preCalculated) {
-                // PRE-CALCULATED MODE: Load partition asynchronously
-                var prefix = this._getPartitionPrefix(word);
-                return this._loadPartitionAsync(prefix).then(function(words) {
-                    var rules = self._findWordRules(words, word);
-                    if (rules) {
-                        wordFlags = Array.prototype.concat.apply([], rules);
-                    }
-                    return wordFlags && wordFlags.indexOf(self.flags[flag]) !== -1;
-                });
-            } else {
-                // TRADITIONAL MODE: Wrap sync result in Promise
-                return Promise.resolve(this.hasFlag(word, flag, wordFlags));
-            }
-        },
-        
         /**
          * Returns a list of suggestions for a misspelled word.
          *
          * @see http://www.norvig.com/spell-correct.html for the basis of this suggestor.
          * This suggestor is primitive, but it works.
-         * 
-         * NOTE: In pre-calculated mode, this method uses synchronous partition loading.
-         * For browser environments, call preloadPartitions() first to avoid deprecated
-         * synchronous XHR, or ensure needed partitions are already cached.
          *
          * @param {string} word The misspelling.
          * @param {number} [limit=5] The maximum number of suggestions to return.
@@ -1421,84 +1292,6 @@ var Typo;
         },
         
         /**
-         * Load a word partition from file asynchronously (with caching)
-         * @param {string} prefix - The partition prefix (e.g., "ab", "he")
-         * @returns {Promise<Array>} Promise resolving to array of word objects
-         * @private
-         */
-        _loadPartitionAsync: function(prefix) {
-            var self = this;
-            
-            // Check cache first
-            if (this.partitionCache.has(prefix)) {
-                return Promise.resolve(this.partitionCache.get(prefix));
-            }
-            
-            // Check if partition exists
-            var partitionInfo = this.partitionIndex[prefix];
-            if (!partitionInfo) {
-                return Promise.resolve([]);
-            }
-            
-            var basePath = this.preCalculatedPath + '/' + this.dictionary;
-            
-            return this._readFile(basePath + '/' + partitionInfo.file, 'utf8', true)
-                .then(function(partitionData) {
-                    var partition = JSON.parse(partitionData);
-                    
-                    // Cache partition
-                    self.partitionCache.set(prefix, partition.words);
-                    
-                    return partition.words;
-                });
-        },
-        
-        /**
-         * Preload partitions into cache asynchronously.
-         * Call this after loading a pre-calculated dictionary to enable 
-         * synchronous operations like suggest() without sync XHR.
-         * 
-         * @param {Array} [prefixes] Optional array of partition prefixes to load.
-         *                           If omitted, loads all partitions.
-         * @param {Function} [progressCallback] Optional callback for progress updates.
-         *        Called with object: { current: number, total: number, prefix: string }
-         * @returns {Promise} Promise that resolves when all partitions are loaded.
-         */
-        preloadPartitions: function(prefixes, progressCallback) {
-            var self = this;
-            
-            if (!this.loaded || !this.preCalculated) {
-                return Promise.reject("Pre-calculated dictionary not loaded.");
-            }
-            
-            // If no prefixes specified, load all
-            if (!prefixes) {
-                prefixes = Object.keys(this.partitionIndex);
-            }
-            
-            var total = prefixes.length;
-            var loaded = 0;
-            
-            // Load partitions sequentially to avoid overwhelming the network
-            var loadNext = function(index) {
-                if (index >= prefixes.length) {
-                    return Promise.resolve();
-                }
-                
-                var prefix = prefixes[index];
-                return self._loadPartitionAsync(prefix).then(function() {
-                    loaded++;
-                    if (progressCallback) {
-                        progressCallback({ current: loaded, total: total, prefix: prefix });
-                    }
-                    return loadNext(index + 1);
-                });
-            };
-            
-            return loadNext(0);
-        },
-        
-        /**
          * Binary search for a word in a sorted array of word objects
          * @param {Array} words - Sorted array of word objects {w: word, r: rules}
          * @param {string} target - Word to find
@@ -1609,50 +1402,6 @@ var Typo;
             }
             
             return found;
-        },
-        
-        /**
-         * Check if a word exists in pre-calculated dictionary (asynchronous)
-         * @param {string} word - Word to check
-         * @returns {Promise<boolean>} Promise resolving to true if word found
-         * @private
-         */
-        _checkPreCalculatedAsync: function(word) {
-            var self = this;
-            
-            // Check negative cache first
-            if (this.notFoundCache.has(word)) {
-                return Promise.resolve(false);
-            }
-            
-            // Check bloom filter (fast rejection of misspellings)
-            if (!this.bloomFilter.mightContain(word)) {
-                this.notFoundCache.add(word);
-                return Promise.resolve(false);
-            }
-            
-            // Determine partition
-            var prefix = this._getPartitionPrefix(word);
-            
-            // Load partition and search
-            return this._loadPartitionAsync(prefix).then(function(words) {
-                var found = self._binarySearch(words, word);
-                
-                if (!found) {
-                    // Check if this might be a compound word
-                    if ("COMPOUNDMIN" in self.flags && word.length >= self.flags.COMPOUNDMIN) {
-                        for (var i = 0, _len = self.compoundRules.length; i < _len; i++) {
-                            if (word.match(self.compoundRules[i])) {
-                                return true;  // Valid compound word
-                            }
-                        }
-                    }
-                    
-                    self.notFoundCache.add(word);
-                }
-                
-                return found;
-            });
         },
         
         /**
