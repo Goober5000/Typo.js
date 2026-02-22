@@ -791,7 +791,7 @@ var Typo;
          * (e.g., rule A references rule B which references rule A).
          * Hunspell itself imposes similar limits.
          */
-        _maxAffixDepth: 7,
+        _maxAffixDepth: 5,
         
         /**
          * Applies an affix rule to a word.
@@ -806,6 +806,9 @@ var Typo;
             var entries = rule.entries;
             var newWords = [];
             for (var i = 0, _len = entries.length; i < _len; i++) {
+                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                    break;
+                }
                 var entry = entries[i];
                 if (!entry.match || word.match(entry.match)) {
                     var newWord = word;
@@ -819,8 +822,12 @@ var Typo;
                         newWord = entry.add + newWord;
                     }
                     newWords.push(newWord);
+                    this._expansionCount++;
                     if ("continuationClasses" in entry && _depth < this._maxAffixDepth) {
                         for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
+                            if (this._expansionCount >= this._maxExpansionsPerWord) {
+                                break;
+                            }
                             var continuationRule = this.rules[entry.continuationClasses[j]];
                             if (continuationRule) {
                                 newWords = newWords.concat(this._applyRule(newWord, continuationRule, _depth + 1));
