@@ -7,7 +7,7 @@
  * Example: node test-precalc.js it_IT ./precalc-dicts
  */
 
-const Typo = require('./typo-precalc.js');
+const Typo = require('./typo.js');
 
 // Parse command line arguments
 const args = process.argv.slice(2);
