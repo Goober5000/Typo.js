@@ -895,6 +895,8 @@ var Typo;
                         var rules = this._findWordRules(words, word);
                         if (rules) {
                             wordFlags = Array.prototype.concat.apply([], rules);
+                        } else {
+                            wordFlags = [];
                         }
                     } else {
                         // TRADITIONAL MODE: Use dictionaryTable
@@ -1184,9 +1186,10 @@ var Typo;
             this.flags = compoundJson.flags;
             this.replacementTable = compoundJson.replacementTable || [];  // For suggest() support
             
-            // Load rules dictionary for hasFlag support
-            var rulesData = this._readFile(basePath + '/rules.json');
-            this.rules = JSON.parse(rulesData);
+            // Note: this.rules (affix rule definitions) is not loaded in pre-calculated
+            // mode. It is only used during traditional dictionary construction (_applyRule,
+            // _applySingleRuleToWord, etc.), not at spell-check time. The per-word rule
+            // codes needed by hasFlag are stored in the partition files instead.
             
             this.loaded = true;
         },
@@ -1199,13 +1202,12 @@ var Typo;
             var self = this;
             var basePath = this.preCalculatedPath + '/' + this.dictionary;
             
-            // Load index, bloom filter, compound data, and rules
+            // Load index, bloom filter, and compound data
             var indexPromise = this._readFile(basePath + '/index.json', 'utf8', true);
             var bloomPromise = this._readFile(basePath + '/bloom.json', 'utf8', true);
             var compoundPromise = this._readFile(basePath + '/compound.json', 'utf8', true);
-            var rulesPromise = this._readFile(basePath + '/rules.json', 'utf8', true);
             
-            Promise.all([indexPromise, bloomPromise, compoundPromise, rulesPromise]).then(function(results) {
+            Promise.all([indexPromise, bloomPromise, compoundPromise]).then(function(results) {
                 var index = JSON.parse(results[0]);
                 
                 // Version check
@@ -1233,8 +1235,9 @@ var Typo;
                 self.flags = compoundJson.flags;
                 self.replacementTable = compoundJson.replacementTable || [];  // For suggest() support
                 
-                // Load rules dictionary for hasFlag support
-                self.rules = JSON.parse(results[3]);
+                // Note: this.rules (affix rule definitions) is not loaded in pre-calculated
+                // mode. It is only used during traditional dictionary construction, not at
+                // spell-check time.
                 
                 self.loaded = true;
                 if (callback) callback();
