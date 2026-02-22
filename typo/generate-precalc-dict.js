@@ -5,6 +5,8 @@
  * 
  * Usage: node generate-precalc-dict.js <language> <input-path> <output-path>
  * Example: node generate-precalc-dict.js it_IT ./dictionaries ./precalc-dicts
+ * 
+ * Requires: npm install super-regex
  */
 
 const fs = require('fs');
@@ -22,6 +24,22 @@ if (args.length < 3) {
 const language = args[0];
 const inputPath = args[1];
 const outputPath = args[2];
+
+// Main async wrapper (needed because super-regex is ESM-only)
+(async function() {
+
+// Load super-regex for regex timeout protection
+let superRegex;
+try {
+    superRegex = await import('super-regex');
+    console.log('✓ Loaded super-regex for regex timeout protection');
+} catch (e) {
+    console.warn('⚠ super-regex not found (npm install super-regex)');
+    console.warn('  Falling back to native regex — some dictionaries may freeze on');
+    console.warn('  pathological patterns. The time-based safety limit will still apply.');
+    superRegex = null;
+}
+console.log('');
 
 console.log('='.repeat(70));
 console.log('Generating Pre-Calculated Dictionary');
@@ -73,6 +91,37 @@ if (dicLines.length > 1 && dicLines[1].trim().startsWith('/')) {
 }
 console.log('');
 
+// Build Typo constructor settings
+var typoSettings = {
+    loadingCallback: function(phase, current, total) {
+        if (phase === 'aff') {
+            if (current === 0) {
+                process.stdout.write('  Parsing affix rules...');
+            } else {
+                process.stdout.write(' done\n');
+            }
+        } else if (phase === 'dic') {
+            if (total > 0) {
+                const percent = Math.round((current / total) * 100);
+                process.stdout.write('\r  Expanding dictionary: ' + percent + '% (' + current.toLocaleString() + '/' + total.toLocaleString() + ' entries)');
+                if (current === total) {
+                    process.stdout.write('\n');
+                }
+            }
+        }
+    }
+};
+
+// Use super-regex for timeout-protected regex matching if available
+if (superRegex) {
+    typoSettings.testRegex = function(regex, string) {
+        // super-regex returns false on both non-match and timeout.
+        // A timed-out regex means a pathological pattern that wouldn't
+        // produce useful results anyway, so treating it as non-match is fine.
+        return superRegex.isMatch(regex, string, { timeout: 1000 });
+    };
+}
+
 // Create Typo instance and load dictionary
 console.log('Step 2: Parsing dictionary and expanding words...');
 console.log('  (This may take several minutes for large dictionaries)');
@@ -80,25 +129,7 @@ const startTime = Date.now();
 
 let dict;
 try {
-    dict = new Typo(language, affData, dicData, {
-        loadingCallback: function(phase, current, total) {
-            if (phase === 'aff') {
-                if (current === 0) {
-                    process.stdout.write('  Parsing affix rules...');
-                } else {
-                    process.stdout.write(' done\n');
-                }
-            } else if (phase === 'dic') {
-                if (total > 0) {
-                    const percent = Math.round((current / total) * 100);
-                    process.stdout.write('\r  Expanding dictionary: ' + percent + '% (' + current.toLocaleString() + '/' + total.toLocaleString() + ' entries)');
-                    if (current === total) {
-                        process.stdout.write('\n');
-                    }
-                }
-            }
-        }
-    });
+    dict = new Typo(language, affData, dicData, typoSettings);
 } catch (error) {
     console.error('Error: Failed to parse dictionary');
     console.error('  ' + (error.message || error));
