@@ -566,6 +566,10 @@ var Typo;
         _applyRuleCombinations: function (word, baseRule, baseRuleIndex, allRuleCodes, dictionaryTable) {
             // Try combining with subsequent rules in the list
             for (var i = baseRuleIndex + 1, len = allRuleCodes.length; i < len; i++) {
+                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                    break;
+                }
+                
                 var combineCode = allRuleCodes[i];
                 var combineRule = this.rules[combineCode];
 
@@ -581,7 +585,11 @@ var Typo;
 
                     // Add all combined forms to the dictionary
                     for (var j = 0, jlen = combinedWords.length; j < jlen; j++) {
+                        if (this._expansionCount >= this._maxExpansionsPerWord) {
+                            break;
+                        }
                         this._addWordToDictionary(dictionaryTable, combinedWords[j], []);
+                        this._expansionCount++;
                     }
                 }
             }
@@ -608,8 +616,13 @@ var Typo;
 
             // Add each generated word to the dictionary
             for (var i = 0, len = generatedWords.length; i < len; i++) {
+                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                    break;
+                }
+                
                 var newWord = generatedWords[i];
                 this._addWordToDictionary(dictionaryTable, newWord, []);
+                this._expansionCount++;
 
                 // If this rule can combine with others, apply combinations
                 if (rule.combineable) {
@@ -628,7 +641,12 @@ var Typo;
          * @param {Array} ruleCodesArray Array of rule codes to apply to this word
          * @param {Object} dictionaryTable The dictionary table to populate
          */
+        _maxExpansionsPerWord: 5000,
+        _expansionCount: 0,
+        
         _expandWordWithAffixes: function (word, ruleCodesArray, dictionaryTable) {
+            // Reset expansion counter for this base word
+            this._expansionCount = 0;
             // First, check if this word should be added as-is (without NEEDAFFIX flag)
             var shouldAddBaseWord = true;
             if ("NEEDAFFIX" in this.flags) {
@@ -643,6 +661,10 @@ var Typo;
 
             // Apply each affix rule to the word
             for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
+                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                    break;
+                }
+                
                 var ruleCode = ruleCodesArray[i];
 
                 // Apply the rule and handle combinations
