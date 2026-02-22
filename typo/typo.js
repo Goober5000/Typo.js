@@ -769,7 +769,7 @@ var Typo;
          * (e.g., rule A references rule B which references rule A).
          * Hunspell itself imposes similar limits.
          */
-        _maxAffixDepth: 5,
+        _maxAffixDepth: 7,
         
         /**
          * Applies an affix rule to a word.
