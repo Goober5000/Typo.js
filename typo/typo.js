@@ -566,7 +566,7 @@ var Typo;
         _applyRuleCombinations: function (word, baseRule, baseRuleIndex, allRuleCodes, dictionaryTable) {
             // Try combining with subsequent rules in the list
             for (var i = baseRuleIndex + 1, len = allRuleCodes.length; i < len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
+                if (this._expansionLimitReached()) {
                     break;
                 }
                 
@@ -585,7 +585,7 @@ var Typo;
 
                     // Add all combined forms to the dictionary
                     for (var j = 0, jlen = combinedWords.length; j < jlen; j++) {
-                        if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
+                        if (this._expansionLimitReached()) {
                             break;
                         }
                         this._addWordToDictionary(dictionaryTable, combinedWords[j], []);
@@ -616,7 +616,7 @@ var Typo;
 
             // Add each generated word to the dictionary
             for (var i = 0, len = generatedWords.length; i < len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
+                if (this._expansionLimitReached()) {
                     break;
                 }
                 
@@ -645,11 +645,28 @@ var Typo;
         _expansionCount: 0,
         _maxWorkPerWord: 100000,
         _workCount: 0,
+        _maxTimePerWord: 5000,  // milliseconds
+        _expansionStartTime: 0,
+        
+        /**
+         * Checks whether any expansion limit has been reached for the current base word.
+         * Three limits are enforced:
+         *   - Total generated words (_maxExpansionsPerWord)
+         *   - Total rule entry iterations (_maxWorkPerWord)
+         *   - Wall-clock time (_maxTimePerWord) — catches catastrophic regex backtracking
+         * @returns {boolean}
+         */
+        _expansionLimitReached: function () {
+            return this._expansionCount >= this._maxExpansionsPerWord ||
+                   this._workCount >= this._maxWorkPerWord ||
+                   Date.now() - this._expansionStartTime >= this._maxTimePerWord;
+        },
         
         _expandWordWithAffixes: function (word, ruleCodesArray, dictionaryTable) {
             // Reset counters for this base word
             this._expansionCount = 0;
             this._workCount = 0;
+            this._expansionStartTime = Date.now();
             // First, check if this word should be added as-is (without NEEDAFFIX flag)
             var shouldAddBaseWord = true;
             if ("NEEDAFFIX" in this.flags) {
@@ -664,7 +681,7 @@ var Typo;
 
             // Apply each affix rule to the word
             for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
+                if (this._expansionLimitReached()) {
                     break;
                 }
                 
@@ -733,7 +750,7 @@ var Typo;
                     this._addWordToDictionary(dictionaryTable, word.trim(), []);
                 }
                 
-                if (this.loadingCallback && (i % 10 === 0)) {
+                if (this.loadingCallback && i % 1000 === 0) {
                     this.loadingCallback('dic', i, totalEntries);
                 }
             }
@@ -810,7 +827,7 @@ var Typo;
             var newWords = [];
             for (var i = 0, _len = entries.length; i < _len; i++) {
                 this._workCount++;
-                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
+                if (this._expansionLimitReached()) {
                     break;
                 }
                 var entry = entries[i];
@@ -829,7 +846,7 @@ var Typo;
                     this._expansionCount++;
                     if ("continuationClasses" in entry && _depth < this._maxAffixDepth) {
                         for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
-                            if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
+                            if (this._expansionLimitReached()) {
                                 break;
                             }
                             var continuationRule = this.rules[entry.continuationClasses[j]];
