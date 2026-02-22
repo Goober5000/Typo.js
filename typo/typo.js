@@ -1388,20 +1388,44 @@ var Typo;
             var words = this._loadPartition(prefix);
             var found = this._binarySearch(words, word);
             
-            if (!found) {
-                // Check if this might be a compound word (using same logic as traditional mode)
-                if ("COMPOUNDMIN" in this.flags && word.length >= this.flags.COMPOUNDMIN) {
-                    for (var i = 0, _len = this.compoundRules.length; i < _len; i++) {
-                        if (word.match(this.compoundRules[i])) {
-                            return true;  // Valid compound word
-                        }
+            if (found) {
+                // Word is in the partition. Check its rule codes for ONLYINCOMPOUND,
+                // mirroring the traditional checkExact logic (lines 862-874).
+                // The partition is already cached, so this is a cheap lookup.
+                var ruleCodes = this._findWordRules(words, word);
+                
+                if (ruleCodes === null) {
+                    // Word has no flags — accept unconditionally.
+                    // (Equivalent to the traditional "ruleCodes === null" branch.)
+                    return true;
+                }
+                
+                // Word has flags. Accept if ANY rule set lacks ONLYINCOMPOUND.
+                // Reject only if ALL rule sets have it (word is only valid inside compounds).
+                for (var i = 0, _len = ruleCodes.length; i < _len; i++) {
+                    if (!this.hasFlag(word, "ONLYINCOMPOUND", ruleCodes[i])) {
+                        return true;
                     }
                 }
                 
+                // All rule sets have ONLYINCOMPOUND — reject as standalone word.
+                // This mirrors the traditional checkExact behavior, which returns
+                // false without attempting a compound check.
                 this.notFoundCache.add(word);
+                return false;
             }
             
-            return found;
+            // Word not found in partition. Check if it might be a compound word.
+            if ("COMPOUNDMIN" in this.flags && word.length >= this.flags.COMPOUNDMIN) {
+                for (var i = 0, _len = this.compoundRules.length; i < _len; i++) {
+                    if (word.match(this.compoundRules[i])) {
+                        return true;  // Valid compound word
+                    }
+                }
+            }
+            
+            this.notFoundCache.add(word);
+            return false;
         },
         
         /**
