@@ -80,7 +80,25 @@ const startTime = Date.now();
 
 let dict;
 try {
-    dict = new Typo(language, affData, dicData);
+    dict = new Typo(language, affData, dicData, {
+        loadingCallback: function(phase, current, total) {
+            if (phase === 'aff') {
+                if (current === 0) {
+                    process.stdout.write('  Parsing affix rules...');
+                } else {
+                    process.stdout.write(' done\n');
+                }
+            } else if (phase === 'dic') {
+                if (total > 0) {
+                    const percent = Math.round((current / total) * 100);
+                    process.stdout.write('\r  Expanding dictionary: ' + percent + '% (' + current.toLocaleString() + '/' + total.toLocaleString() + ' entries)');
+                    if (current === total) {
+                        process.stdout.write('\n');
+                    }
+                }
+            }
+        }
+    });
 } catch (error) {
     console.error('Error: Failed to parse dictionary');
     console.error('  ' + (error.message || error));
