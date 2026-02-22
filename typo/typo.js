@@ -566,7 +566,7 @@ var Typo;
         _applyRuleCombinations: function (word, baseRule, baseRuleIndex, allRuleCodes, dictionaryTable) {
             // Try combining with subsequent rules in the list
             for (var i = baseRuleIndex + 1, len = allRuleCodes.length; i < len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
                     break;
                 }
                 
@@ -585,7 +585,7 @@ var Typo;
 
                     // Add all combined forms to the dictionary
                     for (var j = 0, jlen = combinedWords.length; j < jlen; j++) {
-                        if (this._expansionCount >= this._maxExpansionsPerWord) {
+                        if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
                             break;
                         }
                         this._addWordToDictionary(dictionaryTable, combinedWords[j], []);
@@ -616,7 +616,7 @@ var Typo;
 
             // Add each generated word to the dictionary
             for (var i = 0, len = generatedWords.length; i < len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
                     break;
                 }
                 
@@ -643,10 +643,13 @@ var Typo;
          */
         _maxExpansionsPerWord: 5000,
         _expansionCount: 0,
+        _maxWorkPerWord: 100000,
+        _workCount: 0,
         
         _expandWordWithAffixes: function (word, ruleCodesArray, dictionaryTable) {
-            // Reset expansion counter for this base word
+            // Reset counters for this base word
             this._expansionCount = 0;
+            this._workCount = 0;
             // First, check if this word should be added as-is (without NEEDAFFIX flag)
             var shouldAddBaseWord = true;
             if ("NEEDAFFIX" in this.flags) {
@@ -661,7 +664,7 @@ var Typo;
 
             // Apply each affix rule to the word
             for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
                     break;
                 }
                 
@@ -806,7 +809,8 @@ var Typo;
             var entries = rule.entries;
             var newWords = [];
             for (var i = 0, _len = entries.length; i < _len; i++) {
-                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                this._workCount++;
+                if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
                     break;
                 }
                 var entry = entries[i];
@@ -825,7 +829,7 @@ var Typo;
                     this._expansionCount++;
                     if ("continuationClasses" in entry && _depth < this._maxAffixDepth) {
                         for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
-                            if (this._expansionCount >= this._maxExpansionsPerWord) {
+                            if (this._expansionCount >= this._maxExpansionsPerWord || this._workCount >= this._maxWorkPerWord) {
                                 break;
                             }
                             var continuationRule = this.rules[entry.continuationClasses[j]];
