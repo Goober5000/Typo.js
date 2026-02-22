@@ -1144,25 +1144,6 @@ var Typo;
          */
         
         /**
-         * Enhanced checkExact that supports both traditional and pre-calculated modes
-         * @param {string} word The word to check
-         * @returns {boolean|Promise<boolean>} True if word exists (or Promise in async mode)
-         */
-        checkExactEnhanced: function(word) {
-            if (!this.loaded) {
-                throw "Dictionary not loaded.";
-            }
-            
-            // PRE-CALCULATED MODE
-            if (this.preCalculated) {
-                return this._checkPreCalculated(word);
-            }
-            
-            // TRADITIONAL MODE - use original logic
-            return this.checkExact(word);
-        },
-        
-        /**
          * Load pre-calculated dictionary from JSON files (synchronous)
          * @private
          */
