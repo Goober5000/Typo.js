@@ -43,7 +43,7 @@ var Typo;
         settings = settings || {};
         this.dictionary = null;
         this.rules = {};
-        this.dictionaryTable = {};
+        this.dictionaryTable = new Map();
         this.compoundRules = [];
         this.compoundRuleCodes = {};
         this.replacementTable = [];
@@ -338,26 +338,26 @@ var Typo;
          * Parses the words out from the .dic file.
          *
          * @param {string} data The data from the dictionary file.
-         * @returns HashMap The lookup table containing all of the words and
+         * @returns {Map} The lookup table containing all of the words and
          *                 word forms from the dictionary.
          */
         /**
          * Adds a word to the dictionary table with its associated rule codes.
          * Some dictionaries list the same word multiple times with different rule sets.
          * 
-         * @param {Object} dictionaryTable The dictionary table to add to
+         * @param {Map} dictionaryTable The dictionary table to add to
          * @param {string} word The word to add
          * @param {Array} rules The rule codes associated with this word
          */
         _addWordToDictionary: function (dictionaryTable, word, rules) {
-            if (!dictionaryTable.hasOwnProperty(word)) {
-                dictionaryTable[word] = null;
+            if (!dictionaryTable.has(word)) {
+                dictionaryTable.set(word, null);
             }
             if (rules.length > 0) {
-                if (dictionaryTable[word] === null) {
-                    dictionaryTable[word] = [];
+                if (dictionaryTable.get(word) === null) {
+                    dictionaryTable.set(word, []);
                 }
-                dictionaryTable[word].push(rules);
+                dictionaryTable.get(word).push(rules);
             }
         },
 
@@ -381,7 +381,7 @@ var Typo;
          * @param {Object} baseRule The rule that generated this word
          * @param {number} baseRuleIndex Index of the base rule in the original rule codes array
          * @param {Array} allRuleCodes All rule codes from the original word
-         * @param {Object} dictionaryTable The dictionary table to populate
+         * @param {Map} dictionaryTable The dictionary table to populate
          */
         _applyRuleCombinations: function (word, baseRule, baseRuleIndex, allRuleCodes, dictionaryTable) {
             // Try combining with subsequent rules in the list
@@ -414,7 +414,7 @@ var Typo;
          * @param {string} ruleCode The rule code to apply
          * @param {number} ruleIndex The index of this rule in the word's rule codes array
          * @param {Array} allRuleCodes All rule codes for the original word (for combinations)
-         * @param {Object} dictionaryTable The dictionary table to populate
+         * @param {Map} dictionaryTable The dictionary table to populate
          * @returns {Array} Array of newly generated words
          */
         _applySingleRuleToWord: function (word, ruleCode, ruleIndex, allRuleCodes, dictionaryTable) {
@@ -446,7 +446,7 @@ var Typo;
          * 
          * @param {string} word The base word from the dictionary
          * @param {Array} ruleCodesArray Array of rule codes to apply to this word
-         * @param {Object} dictionaryTable The dictionary table to populate
+         * @param {Map} dictionaryTable The dictionary table to populate
          */
         _expandWordWithAffixes: function (word, ruleCodesArray, dictionaryTable) {
             // First, check if this word should be added as-is (without NEEDAFFIX flag)
@@ -478,12 +478,12 @@ var Typo;
          * Each word is expanded by applying its affix rules to generate all valid forms.
          * 
          * @param {string} data The contents of a .dic file
-         * @returns {Object} The populated dictionary table
+         * @returns {Map} The populated dictionary table
          */
         _parseDIC: function (data) {
             data = this._removeDicComments(data);
             var lines = data.split(/\r?\n/);
-            var dictionaryTable = {};
+            var dictionaryTable = new Map();
 
             // The first line is the number of words in the dictionary.
             // We skip it and start at line 1.
@@ -675,7 +675,7 @@ var Typo;
             if (!this.loaded) {
                 throw "Dictionary not loaded.";
             }
-            var ruleCodes = this.dictionaryTable[word];
+            var ruleCodes = this.dictionaryTable.get(word);
             var i, _len;
             if (typeof ruleCodes === 'undefined') {
                 // Check if this might be a compound word.
@@ -692,7 +692,7 @@ var Typo;
                 // means that the word is in the dictionary but has no flags.
                 return true;
             }
-            else if (typeof ruleCodes === 'object') { // this.dictionary['hasOwnProperty'] will be a function.
+            else if (typeof ruleCodes === 'object') { // ruleCodes is an array of rule sets
                 for (i = 0, _len = ruleCodes.length; i < _len; i++) {
                     if (!this.hasFlag(word, "ONLYINCOMPOUND", ruleCodes[i])) {
                         return true;
@@ -714,7 +714,7 @@ var Typo;
             }
             if (flag in this.flags) {
                 if (typeof wordFlags === 'undefined') {
-                    wordFlags = Array.prototype.concat.apply([], this.dictionaryTable[word]);
+                    wordFlags = Array.prototype.concat.apply([], this.dictionaryTable.get(word));
                 }
                 if (wordFlags && wordFlags.indexOf(this.flags[flag]) !== -1) {
                     return true;
