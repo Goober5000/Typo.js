@@ -234,6 +234,19 @@ console.log('Output directory:', langOutputPath);
 console.log('Total output size:', (totalSize / 1024 / 1024).toFixed(2), 'MB');
 console.log('Total processing time:', totalTime + 's');
 console.log('');
+console.log('Expansion diagnostics:');
+const diag = exported.diagnostics;
+if (diag.expansionLimitHits === 0 && diag.depthLimitHits === 0) {
+    console.log('  ✓ No limits were hit during expansion');
+} else {
+    if (diag.expansionLimitHits > 0) {
+        console.log('  ⚠ Expansion limit hit for', diag.expansionLimitHits.toLocaleString(), 'base words');
+    }
+    if (diag.depthLimitHits > 0) {
+        console.log('  ⚠ Recursion depth limit hit for', diag.depthLimitHits.toLocaleString(), 'base words');
+    }
+}
+console.log('');
 console.log('Files generated:');
 console.log('  - index.json       (partition index)');
 console.log('  - bloom.json       (bloom filter)');

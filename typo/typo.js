@@ -638,8 +638,17 @@ var Typo;
          * V8's Map has a hard ceiling of 2^24 (~16.7M) entries, so without
          * this limit, large dictionaries like Italian can overflow it.
          */
-        _maxExpansionsPerWord: 5000,
+        _maxExpansionsPerWord: 2500,
         _expansionCount: 0,
+
+        /**
+         * Diagnostic counters: track how many base words hit the expansion
+         * limit or the recursion depth limit during dictionary construction.
+         * High values may indicate the limits are too restrictive.
+         */
+        _expansionLimitHits: 0,
+        _depthLimitHits: 0,
+        _depthLimitHit: false,
 
         /**
          * Expands a word by applying all its affix rules and combinations.
@@ -650,8 +659,9 @@ var Typo;
          * @param {Map} dictionaryTable The dictionary table to populate
          */
         _expandWordWithAffixes: function (word, ruleCodesArray, dictionaryTable) {
-            // Reset expansion counter for this base word
+            // Reset per-word state
             this._expansionCount = 0;
+            this._depthLimitHit = false;
             // First, check if this word should be added as-is (without NEEDAFFIX flag)
             var shouldAddBaseWord = true;
             if ("NEEDAFFIX" in this.flags) {
@@ -676,6 +686,14 @@ var Typo;
 
                 // Track for compound word formation
                 this._trackCompoundWord(word, ruleCode);
+            }
+            
+            // Update diagnostic counters
+            if (this._expansionCount >= this._maxExpansionsPerWord) {
+                this._expansionLimitHits++;
+            }
+            if (this._depthLimitHit) {
+                this._depthLimitHits++;
             }
         },
 
@@ -831,15 +849,16 @@ var Typo;
                     }
                     newWords.push(newWord);
                     this._expansionCount++;
-                    if ("continuationClasses" in entry && _depth < maxDepth) {
-                        for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
-                            if (this._expansionCount >= maxExpansions) {
-                                break;
-                            }
-                            var continuationRule = rules[entry.continuationClasses[j]];
-                            if (continuationRule) {
-                                newWords = newWords.concat(this._applyRule(newWord, continuationRule, _depth + 1));
-                            }
+                    if ("continuationClasses" in entry) {
+                        if (_depth < maxDepth) {
+                            for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
+                                if (this._expansionCount >= maxExpansions) {
+                                    break;
+                                }
+                                var continuationRule = rules[entry.continuationClasses[j]];
+                                if (continuationRule) {
+                                    newWords = newWords.concat(this._applyRule(newWord, continuationRule, _depth + 1));
+                                }
                             /*
                             else {
                                 // This shouldn't happen, but it does, at least in the de_DE dictionary.
@@ -847,6 +866,9 @@ var Typo;
                                 // of upper-case.
                             }
                             */
+                            }
+                        } else {
+                            this._depthLimitHit = true;
                         }
                     }
                 }
@@ -1627,7 +1649,11 @@ var Typo;
                 bloom: bloom.toJSON(),
                 partitions: partitionData,
                 compound: compoundData,
-                rules: this.rules  // Export rules dictionary for hasFlag
+                rules: this.rules,  // Export rules dictionary for hasFlag
+                diagnostics: {
+                    expansionLimitHits: this._expansionLimitHits,
+                    depthLimitHits: this._depthLimitHits
+                }
             };
         }
     };
