@@ -649,6 +649,7 @@ var Typo;
         _expansionLimitHits: 0,
         _depthLimitHits: 0,
         _depthLimitHit: false,
+        _expansionHistogram: null,
 
         /**
          * Expands a word by applying all its affix rules and combinations.
@@ -689,12 +690,72 @@ var Typo;
             }
             
             // Update diagnostic counters
+            if (this._expansionHistogram) {
+                this._expansionHistogram.push(this._expansionCount);
+            }
             if (this._expansionCount >= this._maxExpansionsPerWord) {
                 this._expansionLimitHits++;
             }
             if (this._depthLimitHit) {
                 this._depthLimitHits++;
             }
+        },
+
+        /**
+         * Summarizes the expansion histogram into percentiles, buckets,
+         * and top-N outliers for diagnostic analysis.
+         * @returns {Object|null} Summary object, or null if no histogram data
+         */
+        _summarizeHistogram: function () {
+            var hist = this._expansionHistogram;
+            if (!hist || hist.length === 0) return null;
+
+            // Sort a copy for percentile calculations
+            var sorted = hist.slice().sort(function (a, b) { return a - b; });
+            var n = sorted.length;
+
+            var sum = 0;
+            for (var i = 0; i < n; i++) sum += sorted[i];
+
+            // Percentile helper (nearest-rank method)
+            function pct(p) { return sorted[Math.min(Math.ceil(p / 100 * n) - 1, n - 1)]; }
+
+            // Build logarithmic buckets: 0, 1, 2-5, 6-10, 11-25, 26-50,
+            // 51-100, 101-250, 251-500, 501-1000, 1001-2500, 2501+
+            var bucketEdges = [0, 1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500];
+            var buckets = [];
+            var bi = 0;
+            for (var si = 0; si < n; si++) {
+                while (bi < bucketEdges.length && sorted[si] > bucketEdges[bi]) bi++;
+                var label = bi === 0 ? '0'
+                    : bi < bucketEdges.length ? (bucketEdges[bi - 1] + 1) + '-' + bucketEdges[bi]
+                    : (bucketEdges[bucketEdges.length - 1] + 1) + '+';
+                if (buckets.length === 0 || buckets[buckets.length - 1].range !== label) {
+                    buckets.push({ range: label, count: 1 });
+                } else {
+                    buckets[buckets.length - 1].count++;
+                }
+            }
+
+            // Top 20 outliers (highest expansion counts)
+            var topN = Math.min(20, n);
+            var outliers = sorted.slice(n - topN).reverse();
+
+            return {
+                totalWords: n,
+                min: sorted[0],
+                max: sorted[n - 1],
+                mean: Math.round(sum / n * 100) / 100,
+                median: pct(50),
+                percentiles: {
+                    p90: pct(90),
+                    p95: pct(95),
+                    p99: pct(99),
+                    p999: pct(99.9)
+                },
+                buckets: buckets,
+                top20: outliers
+            };
         },
 
         /**
@@ -708,6 +769,9 @@ var Typo;
             data = this._removeDicComments(data);
             var lines = data.split(/\r?\n/);
             var dictionaryTable = new Map();
+            
+            // Initialize per-word expansion histogram for diagnostics
+            this._expansionHistogram = [];
             
             // Total entries (line 0 is the word count header)
             var totalEntries = lines.length - 1;
@@ -1652,7 +1716,8 @@ var Typo;
                 rules: this.rules,  // Export rules dictionary for hasFlag
                 diagnostics: {
                     expansionLimitHits: this._expansionLimitHits,
-                    depthLimitHits: this._depthLimitHits
+                    depthLimitHits: this._depthLimitHits,
+                    expansionHistogram: this._summarizeHistogram()
                 }
             };
         }

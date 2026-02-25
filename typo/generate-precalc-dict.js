@@ -169,6 +169,67 @@ const exported = dict.exportPreCalculated(function(progress) {
 console.log('  ✓ Total words:', exported.index.totalWords.toLocaleString());
 console.log('  ✓ Partitions:', exported.index.partitionCount);
 console.log('  ✓ Bloom filter size:', exported.bloom.bits.length.toLocaleString(), 'bytes');
+
+// Display expansion diagnostics
+if (exported.diagnostics) {
+    const diag = exported.diagnostics;
+    console.log('');
+    console.log('-'.repeat(70));
+    console.log('Expansion Diagnostics');
+    console.log('-'.repeat(70));
+    console.log('  Expansion limit hits:', diag.expansionLimitHits.toLocaleString());
+    console.log('  Depth limit hits:', diag.depthLimitHits.toLocaleString());
+    
+    if (diag.expansionHistogram) {
+        const h = diag.expansionHistogram;
+        console.log('');
+        console.log('  Expansion Distribution (' + h.totalWords.toLocaleString() + ' base words with rules):');
+        console.log('    Min:', h.min, ' Max:', h.max, ' Mean:', h.mean, ' Median:', h.median);
+        console.log('    P90:', h.percentiles.p90, ' P95:', h.percentiles.p95,
+                     ' P99:', h.percentiles.p99, ' P99.9:', h.percentiles.p999);
+        
+        console.log('');
+        console.log('  Bucket Distribution:');
+        // Find max count for bar chart scaling
+        let maxCount = 0;
+        for (const b of h.buckets) { if (b.count > maxCount) maxCount = b.count; }
+        const barWidth = 40;
+        
+        for (const b of h.buckets) {
+            const pct = (b.count / h.totalWords * 100).toFixed(1);
+            const bar = '█'.repeat(Math.max(1, Math.round(b.count / maxCount * barWidth)));
+            const label = b.range.padStart(10);
+            const countStr = b.count.toLocaleString().padStart(8);
+            console.log('    ' + label + ': ' + countStr + ' (' + pct.padStart(5) + '%) ' + bar);
+        }
+        
+        console.log('');
+        console.log('  Top 20 Expansion Counts:');
+        console.log('    ' + h.top20.join(', '));
+        
+        // Suggest a cutoff based on the data
+        console.log('');
+        console.log('  Cutoff Analysis (words retained if limit set to value):');
+        const cutoffs = [50, 100, 150, 200, 250, 500, 1000];
+        for (const c of cutoffs) {
+            // Words that would be unaffected (count <= c)
+            let retained = 0;
+            for (const b of h.buckets) {
+                // Parse the range to see if the bucket falls within the cutoff
+                const parts = b.range.split('-');
+                const upper = b.range.endsWith('+') ? Infinity : parseInt(parts[parts.length - 1]);
+                if (upper <= c) {
+                    retained += b.count;
+                }
+            }
+            const retainedPct = (retained / h.totalWords * 100).toFixed(1);
+            const clipped = h.totalWords - retained;
+            console.log('    Limit ' + String(c).padStart(5) + ': ' +
+                        retained.toLocaleString().padStart(8) + ' unaffected (' + retainedPct + '%), ' +
+                        clipped.toLocaleString().padStart(6) + ' clipped');
+        }
+    }
+}
 console.log('');
 
 // Create output directory structure
@@ -233,19 +294,6 @@ console.log('='.repeat(70));
 console.log('Output directory:', langOutputPath);
 console.log('Total output size:', (totalSize / 1024 / 1024).toFixed(2), 'MB');
 console.log('Total processing time:', totalTime + 's');
-console.log('');
-console.log('Expansion diagnostics:');
-const diag = exported.diagnostics;
-if (diag.expansionLimitHits === 0 && diag.depthLimitHits === 0) {
-    console.log('  ✓ No limits were hit during expansion');
-} else {
-    if (diag.expansionLimitHits > 0) {
-        console.log('  ⚠ Expansion limit hit for', diag.expansionLimitHits.toLocaleString(), 'base words');
-    }
-    if (diag.depthLimitHits > 0) {
-        console.log('  ⚠ Recursion depth limit hit for', diag.depthLimitHits.toLocaleString(), 'base words');
-    }
-}
 console.log('');
 console.log('Files generated:');
 console.log('  - index.json       (partition index)');
