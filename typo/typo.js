@@ -567,8 +567,12 @@ var Typo;
          * @param {Map} dictionaryTable The dictionary table to populate
          */
         _applyRuleCombinations: function (word, baseRule, baseRuleIndex, allRuleCodes, dictionaryTable) {
+            var maxExpansions = this._maxExpansionsPerWord;
             // Try combining with subsequent rules in the list
             for (var i = baseRuleIndex + 1, len = allRuleCodes.length; i < len; i++) {
+                if (this._expansionCount >= maxExpansions) {
+                    break;
+                }
                 var combineCode = allRuleCodes[i];
                 var combineRule = this.rules[combineCode];
 
@@ -610,7 +614,11 @@ var Typo;
             var generatedWords = this._applyRule(word, rule);
 
             // Add each generated word to the dictionary
+            var maxExpansions = this._maxExpansionsPerWord;
             for (var i = 0, len = generatedWords.length; i < len; i++) {
+                if (this._expansionCount >= maxExpansions) {
+                    break;
+                }
                 var newWord = generatedWords[i];
                 this._addWordToDictionary(dictionaryTable, newWord, []);
 
@@ -624,6 +632,16 @@ var Typo;
         },
 
         /**
+         * Maximum number of expanded word forms per base dictionary word.
+         * Prevents combinatorial explosion when a word has many combineable
+         * affix rules (the cross-product of PFX × SFX can be enormous).
+         * V8's Map has a hard ceiling of 2^24 (~16.7M) entries, so without
+         * this limit, large dictionaries like Italian can overflow it.
+         */
+        _maxExpansionsPerWord: 5000,
+        _expansionCount: 0,
+
+        /**
          * Expands a word by applying all its affix rules and combinations.
          * This is the main entry point for affix expansion.
          * 
@@ -632,6 +650,8 @@ var Typo;
          * @param {Map} dictionaryTable The dictionary table to populate
          */
         _expandWordWithAffixes: function (word, ruleCodesArray, dictionaryTable) {
+            // Reset expansion counter for this base word
+            this._expansionCount = 0;
             // First, check if this word should be added as-is (without NEEDAFFIX flag)
             var shouldAddBaseWord = true;
             if ("NEEDAFFIX" in this.flags) {
@@ -646,6 +666,9 @@ var Typo;
 
             // Apply each affix rule to the word
             for (var i = 0, len = ruleCodesArray.length; i < len; i++) {
+                if (this._expansionCount >= this._maxExpansionsPerWord) {
+                    break;
+                }
                 var ruleCode = ruleCodesArray[i];
 
                 // Apply the rule and handle combinations
@@ -789,7 +812,11 @@ var Typo;
             var testRegex = this._testRegex;
             var maxDepth = this._maxAffixDepth;
             var rules = this.rules;
+            var maxExpansions = this._maxExpansionsPerWord;
             for (var i = 0, _len = entries.length; i < _len; i++) {
+                if (this._expansionCount >= maxExpansions) {
+                    break;
+                }
                 var entry = entries[i];
                 if (!entry.match || testRegex(entry.match, word)) {
                     var newWord = word;
@@ -803,8 +830,12 @@ var Typo;
                         newWord = entry.add + newWord;
                     }
                     newWords.push(newWord);
+                    this._expansionCount++;
                     if ("continuationClasses" in entry && _depth < maxDepth) {
                         for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
+                            if (this._expansionCount >= maxExpansions) {
+                                break;
+                            }
                             var continuationRule = rules[entry.continuationClasses[j]];
                             if (continuationRule) {
                                 newWords = newWords.concat(this._applyRule(newWord, continuationRule, _depth + 1));
