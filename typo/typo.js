@@ -521,13 +521,6 @@ var Typo;
             return line;
         },
         /**
-         * Parses the words out from the .dic file.
-         *
-         * @param {string} data The data from the dictionary file.
-         * @returns {Map} The lookup table containing all of the words and
-         *                 word forms from the dictionary.
-         */
-        /**
          * Adds a word to the dictionary table with its associated rule codes.
          * Some dictionaries list the same word multiple times with different rule sets.
          * 
@@ -793,9 +786,12 @@ var Typo;
             _depth = _depth || 0;
             var entries = rule.entries;
             var newWords = [];
+            var testRegex = this._testRegex;
+            var maxDepth = this._maxAffixDepth;
+            var rules = this.rules;
             for (var i = 0, _len = entries.length; i < _len; i++) {
                 var entry = entries[i];
-                if (!entry.match || this._testRegex(entry.match, word)) {
+                if (!entry.match || testRegex(entry.match, word)) {
                     var newWord = word;
                     if (entry.remove) {
                         newWord = newWord.replace(entry.remove, "");
@@ -807,9 +803,9 @@ var Typo;
                         newWord = entry.add + newWord;
                     }
                     newWords.push(newWord);
-                    if ("continuationClasses" in entry && _depth < this._maxAffixDepth) {
+                    if ("continuationClasses" in entry && _depth < maxDepth) {
                         for (var j = 0, _jlen = entry.continuationClasses.length; j < _jlen; j++) {
-                            var continuationRule = this.rules[entry.continuationClasses[j]];
+                            var continuationRule = rules[entry.continuationClasses[j]];
                             if (continuationRule) {
                                 newWords = newWords.concat(this._applyRule(newWord, continuationRule, _depth + 1));
                             }
@@ -897,7 +893,7 @@ var Typo;
             }
             
             // TRADITIONAL MODE: Use dictionaryTable
-			var ruleCodes = this.dictionaryTable.get(word);
+            var ruleCodes = this.dictionaryTable.get(word);
             var i, _len;
             if (typeof ruleCodes === 'undefined') {
                 // Check if this might be a compound word.
@@ -949,7 +945,8 @@ var Typo;
                         }
                     } else {
                         // TRADITIONAL MODE: Use dictionaryTable
-						wordFlags = Array.prototype.concat.apply([], this.dictionaryTable.get(word));
+                        var entry = this.dictionaryTable.get(word);
+                        wordFlags = entry ? Array.prototype.concat.apply([], entry) : [];
                     }
                 }
                 if (wordFlags && wordFlags.indexOf(this.flags[flag]) !== -1) {
