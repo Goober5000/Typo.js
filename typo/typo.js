@@ -1126,6 +1126,9 @@ var Typo;
                     else if ("capitalized" === capitalization_scheme) {
                         sorted_corrections[i][0] = sorted_corrections[i][0].substr(0, 1).toUpperCase() + sorted_corrections[i][0].substr(1);
                     }
+                    else if ("lowercase" === capitalization_scheme) {
+                        sorted_corrections[i][0] = sorted_corrections[i][0].toLowerCase();
+                    }
                     if (!self.hasFlag(sorted_corrections[i][0], "NOSUGGEST") && rv.indexOf(sorted_corrections[i][0]) === -1) {
                         rv.push(sorted_corrections[i][0]);
                     }
