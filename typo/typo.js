@@ -638,7 +638,7 @@ var Typo;
          * V8's Map has a hard ceiling of 2^24 (~16.7M) entries, so without
          * this limit, large dictionaries like Italian can overflow it.
          */
-        _maxExpansionsPerWord: 2500,
+        _maxExpansionsPerWord: 250,
         _expansionCount: 0,
 
         /**
