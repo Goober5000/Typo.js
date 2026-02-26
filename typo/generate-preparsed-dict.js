@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Generate pre-calculated dictionary files from traditional .aff/.dic files
+ * Generate pre-parsed dictionary files from traditional .aff/.dic files
  * 
- * Usage: node generate-precalc-dict.js <language> <input-path> <output-path>
- * Example: node generate-precalc-dict.js it_IT ./dictionaries ./precalc-dicts
+ * Usage: node generate-preparsed-dict.js <language> <input-path> <output-path>
+ * Example: node generate-preparsed-dict.js it_IT ./dictionaries ./preparsed-dicts
  * 
  * Requires: npm install re2
  */
@@ -16,8 +16,8 @@ const Typo = require('./typo.js');
 // Parse command line arguments
 const args = process.argv.slice(2);
 if (args.length < 3) {
-    console.error('Usage: node generate-precalc-dict.js <language> <input-path> <output-path>');
-    console.error('Example: node generate-precalc-dict.js it_IT ./dictionaries ./precalc-dicts');
+    console.error('Usage: node generate-preparsed-dict.js <language> <input-path> <output-path>');
+    console.error('Example: node generate-preparsed-dict.js it_IT ./dictionaries ./preparsed-dicts');
     process.exit(1);
 }
 
@@ -39,7 +39,7 @@ try {
 console.log('');
 
 console.log('='.repeat(70));
-console.log('Generating Pre-Calculated Dictionary');
+console.log('Generating Pre-Parsed Dictionary');
 console.log('='.repeat(70));
 console.log('Language:', language);
 console.log('Input path:', inputPath);
@@ -148,11 +148,11 @@ const loadTime = ((Date.now() - startTime) / 1000).toFixed(2);
 console.log('  ✓ Dictionary loaded and expanded in ' + loadTime + 's');
 console.log('');
 
-// Export pre-calculated data with progress reporting
-console.log('Step 3: Exporting pre-calculated word lists...');
+// Export pre-parsed data with progress reporting
+console.log('Step 3: Exporting pre-parsed word lists...');
 
 let lastPhase = '';
-const exported = dict.exportPreCalculated(function(progress) {
+const exported = dict.exportPreParsed(function(progress) {
     if (progress.phase !== lastPhase) {
         if (lastPhase) process.stdout.write('\n');
         lastPhase = progress.phase;
@@ -271,8 +271,8 @@ console.log('Total processing time:', totalTime + 's');
 console.log('');
 console.log('Usage in Typo.js:');
 console.log('  var dict = new Typo("' + language + '", null, null, {');
-console.log('    preCalculated: true,');
-console.log('    preCalculatedPath: "' + outputPath + '",');
+console.log('    preParsed: true,');
+console.log('    preParsedPath: "' + outputPath + '",');
 console.log('    asyncLoad: true,');
 console.log('    loadedCallback: function(typo) { /* ready */ }');
 console.log('  });');

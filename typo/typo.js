@@ -7,7 +7,7 @@
  * Typo is a JavaScript implementation of a spellchecker using hunspell-style
  * dictionaries.
  * 
- * ENHANCED VERSION: Supports both traditional .aff/.dic loading and pre-calculated
+ * ENHANCED VERSION: Supports both traditional .aff/.dic loading and pre-parsed
  * dictionaries (a single gzipped JSON file containing the fully expanded word list).
  */
 var Typo;
@@ -15,10 +15,10 @@ var Typo;
     "use strict";
     
     /**
-     * Version of the pre-calculated dictionary format.
+     * Version of the pre-parsed dictionary format.
      * Increment this when making breaking changes to the format.
      */
-    var PRECALC_FORMAT_VERSION = 2;
+    var PREPARSED_FORMAT_VERSION = 2;
     
     /**
      * Compare two strings using Unicode code point order.
@@ -61,9 +61,9 @@ var Typo;
      *                              {Function} [loadedCallback]: Called when both affData and wordsData
      *                              have been loaded. Only used if asyncLoad is set to true. The parameter
      *                              is the instantiated Typo object.
-     *                              {boolean} [preCalculated]: If true, load from pre-calculated word lists
-     *                              instead of .aff/.dic files. Requires preCalculatedPath.
-     *                              {string} [preCalculatedPath]: Path to pre-calculated dictionary files.
+     *                              {boolean} [preParsed]: If true, load from pre-parsed word lists
+     *                              instead of .aff/.dic files. Requires preParsedPath.
+     *                              {string} [preParsedPath]: Path to pre-parsed dictionary files.
      *                              {Function} [loadingCallback]: Optional callback for reporting progress
      *                              during traditional dictionary loading. Called with
      *                              (phase, current, total) where phase is 'aff' or 'dic'.
@@ -89,9 +89,9 @@ var Typo;
             return regex.test(string);
         };
         
-        // Pre-calculated dictionary support
-        this.preCalculated = settings.preCalculated || false;
-        this.preCalculatedPath = settings.preCalculatedPath || null;
+        // Pre-parsed dictionary support
+        this.preParsed = settings.preParsed || false;
+        this.preParsedPath = settings.preParsedPath || null;
         
         var self = this;
         var path;
@@ -100,16 +100,16 @@ var Typo;
         if (dictionary) {
             self.dictionary = dictionary;
             
-            // PRE-CALCULATED MODE: Load from pre-calculated files
-            if (self.preCalculated && self.preCalculatedPath) {
+            // PRE-PARSED MODE: Load from pre-parsed files
+            if (self.preParsed && self.preParsedPath) {
                 if (settings.asyncLoad) {
-                    self._loadPreCalculatedAsync(function() {
+                    self._loadPreParsedAsync(function() {
                         if (settings.loadedCallback) {
                             settings.loadedCallback(self);
                         }
                     });
                 } else {
-                    self._loadPreCalculated();
+                    self._loadPreParsed();
                 }
                 return this;
             }
@@ -862,7 +862,7 @@ var Typo;
                 throw "Dictionary not loaded.";
             }
             
-            // Both traditional and pre-calculated modes use dictionaryTable
+            // Both traditional and pre-parsed modes use dictionaryTable
             var ruleCodes = this.dictionaryTable.get(word);
             var i, _len;
             if (typeof ruleCodes === 'undefined') {
@@ -903,7 +903,7 @@ var Typo;
             if (flag in this.flags) {
                 if (typeof wordFlags === 'undefined') {
                     // Get word flags from dictionaryTable (same structure in
-                    // both traditional and pre-calculated modes)
+                    // both traditional and pre-parsed modes)
                     var entry = this.dictionaryTable.get(word);
                     wordFlags = entry ? Array.prototype.concat.apply([], entry) : [];
                 }
@@ -1145,28 +1145,14 @@ var Typo;
         
         /**
          * ========================================================================
-         * PRE-CALCULATED DICTIONARY METHODS
+         * PRE-PARSED DICTIONARY METHODS
          * ========================================================================
          */
         
         /**
-         * Load pre-calculated dictionary (synchronous).
+         * Load pre-parsed dictionary from a single gzipped JSON file (asynchronous).
          * 
-         * Not supported for format version 2+, which uses gzip compression
-         * and requires the asynchronous fetch/DecompressionStream APIs.
-         * Use asyncLoad: true in settings instead.
-         * 
-         * @private
-         */
-        _loadPreCalculated: function() {
-            throw "Synchronous loading is not supported for pre-calculated dictionaries. " +
-                  "Use asyncLoad: true in the Typo constructor settings.";
-        },
-        
-        /**
-         * Load pre-calculated dictionary from a single gzipped JSON file (asynchronous).
-         * 
-         * Fetches <preCalculatedPath>/<language>/dictionary.json.gz, decompresses it,
+         * Fetches <preParsedPath>/<language>/dictionary.json.gz, decompresses it,
          * and populates the same dictionaryTable / compoundRules / flags /
          * replacementTable structures that the traditional .aff/.dic parser builds.
          * After loading, the standard check / checkExact / hasFlag / suggest methods
@@ -1175,9 +1161,9 @@ var Typo;
          * @param {Function} callback Called when loading is complete.
          * @private
          */
-        _loadPreCalculatedAsync: function(callback) {
+        _loadPreParsedAsync: function(callback) {
             var self = this;
-            var url = this.preCalculatedPath + '/' + this.dictionary + '/dictionary.json.gz';
+            var url = this.preParsedPath + '/' + this.dictionary + '/dictionary.json.gz';
             
             fetch(url).then(function(response) {
                 if (!response.ok) {
@@ -1189,10 +1175,10 @@ var Typo;
                 return new Response(decompressed).json();
             }).then(function(data) {
                 // Version check
-                if (data.version !== PRECALC_FORMAT_VERSION) {
+                if (data.version !== PREPARSED_FORMAT_VERSION) {
                     throw new Error(
-                        "Unsupported pre-calculated dictionary version: " + data.version +
-                        ". Expected version " + PRECALC_FORMAT_VERSION + "."
+                        "Unsupported pre-parsed dictionary version: " + data.version +
+                        ". Expected version " + PREPARSED_FORMAT_VERSION + "."
                     );
                 }
                 
@@ -1230,13 +1216,13 @@ var Typo;
                 self.loaded = true;
                 if (callback) callback();
             }).catch(function(error) {
-                console.error('Failed to load pre-calculated dictionary:', error);
+                console.error('Failed to load pre-parsed dictionary:', error);
                 throw error;
             });
         },
         
         /**
-         * Export the current dictionary for pre-calculated mode.
+         * Export the current dictionary for pre-parsed mode.
          * This should be called after loading a traditional .aff/.dic dictionary.
          * 
          * The exported object contains two top-level keys:
@@ -1252,13 +1238,13 @@ var Typo;
          *        Phases: 'collecting', 'sorting', 'complete'
          * @returns {Object} { dictionary: {...}, diagnostics: {...} }
          */
-        exportPreCalculated: function(progressCallback) {
+        exportPreParsed: function(progressCallback) {
             if (!this.loaded) {
                 throw "Dictionary must be loaded before exporting";
             }
             
-            if (this.preCalculated) {
-                throw "Cannot export a pre-calculated dictionary";
+            if (this.preParsed) {
+                throw "Cannot export a pre-parsed dictionary";
             }
             
             // Helper to report progress
@@ -1306,7 +1292,7 @@ var Typo;
             
             return {
                 dictionary: {
-                    version: PRECALC_FORMAT_VERSION,
+                    version: PREPARSED_FORMAT_VERSION,
                     language: this.dictionary,
                     totalWords: totalWords,
                     flaggedWordCount: flaggedWordCount,

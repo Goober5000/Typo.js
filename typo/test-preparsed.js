@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Test script for pre-calculated dictionary system
+ * Test script for pre-parsed dictionary system
  * 
- * Usage: node test-precalc.js <language> <precalc-path>
- * Example: node test-precalc.js it_IT ./precalc-dicts
+ * Usage: node test-preparsed.js <language> <preparsed-path>
+ * Example: node test-preparsed.js it_IT ./preparsed-dicts
  */
 
 const Typo = require('./typo.js');
@@ -12,19 +12,19 @@ const Typo = require('./typo.js');
 // Parse command line arguments
 const args = process.argv.slice(2);
 if (args.length < 2) {
-    console.error('Usage: node test-precalc.js <language> <precalc-path>');
-    console.error('Example: node test-precalc.js it_IT ./precalc-dicts');
+    console.error('Usage: node test-preparsed.js <language> <preparsed-path>');
+    console.error('Example: node test-preparsed.js it_IT ./preparsed-dicts');
     process.exit(1);
 }
 
 const language = args[0];
-const precalcPath = args[1];
+const preparsedPath = args[1];
 
 console.log('='.repeat(70));
-console.log('Testing Pre-Calculated Dictionary');
+console.log('Testing Pre-Parsed Dictionary');
 console.log('='.repeat(70));
 console.log('Language:', language);
-console.log('Pre-calculated path:', precalcPath);
+console.log('Pre-parsed path:', preparsedPath);
 console.log('');
 
 // Load dictionary
@@ -34,12 +34,12 @@ const startTime = Date.now();
 let dict;
 try {
     dict = new Typo(language, null, null, {
-        preCalculated: true,
-        preCalculatedPath: precalcPath
+        preParsed: true,
+        preParsedPath: preparsedPath
     });
 } catch (error) {
-    console.error('✗ Failed to load pre-calculated dictionary.');
-    console.error('  Ensure the pre-calculated files exist at: ' + precalcPath + '/' + language + '/');
+    console.error('✗ Failed to load pre-parsed dictionary.');
+    console.error('  Ensure the pre-parsed files exist at: ' + preparsedPath + '/' + language + '/');
     console.error('  Error:', error.message || error);
     process.exit(1);
 }
@@ -164,7 +164,7 @@ if (tests.suggest && tests.suggest.length > 0) {
 }
 
 // =====================================================================
-// Test 4: hasFlag (verify flag lookups work in precalculated mode)
+// Test 4: hasFlag (verify flag lookups work in preparsed mode)
 // =====================================================================
 if (tests.hasFlag && tests.hasFlag.length > 0) {
     console.log('Test 4: hasFlag:');
