@@ -187,12 +187,13 @@ if (tests.hasFlag && tests.hasFlag.length > 0) {
 }
 
 // =====================================================================
-// Cache statistics
+// Dictionary statistics
 // =====================================================================
-console.log('Cache Statistics:');
+console.log('Dictionary Statistics:');
 console.log('-'.repeat(70));
-console.log('Partition cache entries:', dict.partitionCache.cache.size);
-console.log('Not-found cache entries:', dict.notFoundCache.cache.size);
+console.log('Dictionary table entries:', dict.dictionaryTable.size.toLocaleString());
+console.log('Compound rules:', dict.compoundRules.length);
+console.log('Replacement table entries:', dict.replacementTable.length);
 console.log('');
 
 // =====================================================================

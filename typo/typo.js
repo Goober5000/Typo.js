@@ -1150,6 +1150,84 @@ var Typo;
          */
         
         /**
+         * Populate dictionaryTable and related structures from parsed JSON data.
+         * Shared by both synchronous and asynchronous loading paths.
+         * 
+         * @param {Object} data The parsed dictionary JSON object.
+         * @private
+         */
+        _initFromPreParsedData: function(data) {
+            // Version check
+            if (data.version !== PREPARSED_FORMAT_VERSION) {
+                throw new Error(
+                    "Unsupported pre-parsed dictionary version: " + data.version +
+                    ". Expected version " + PREPARSED_FORMAT_VERSION + "."
+                );
+            }
+            
+            // Build dictionaryTable Map from the two-part storage format:
+            //   words[]        → unflagged entries (stored as null in the Map)
+            //   flaggedWords{} → entries with rule code arrays
+            var map = new Map();
+            
+            var words = data.words;
+            for (var i = 0, len = words.length; i < len; i++) {
+                map.set(words[i], null);
+            }
+            
+            var flagged = data.flaggedWords;
+            for (var word in flagged) {
+                if (flagged.hasOwnProperty(word)) {
+                    map.set(word, flagged[word]);
+                }
+            }
+            
+            this.dictionaryTable = map;
+            
+            // Restore compound rules (deserialize RegExp objects)
+            this.compoundRules = [];
+            if (data.compoundRules) {
+                for (var j = 0; j < data.compoundRules.length; j++) {
+                    var ruleData = data.compoundRules[j];
+                    this.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
+                }
+            }
+            
+            this.flags = data.flags || {};
+            this.replacementTable = data.replacementTable || [];
+            
+            this.loaded = true;
+        },
+        
+        /**
+         * Load pre-parsed dictionary (synchronous, Node.js only).
+         * 
+         * In the browser, gzip decompression requires the asynchronous
+         * DecompressionStream API, so synchronous loading is not supported.
+         * Use asyncLoad: true in settings instead.
+         * 
+         * @private
+         */
+        _loadPreParsed: function() {
+            if (typeof require === 'undefined') {
+                throw new Error(
+                    "Synchronous loading of pre-parsed dictionaries is only supported in Node.js. " +
+                    "In the browser, use asyncLoad: true in the Typo constructor settings."
+                );
+            }
+            
+            var fs = require('fs');
+            var zlib = require('zlib');
+            var filePath = this.preParsedPath + '/' + this.dictionary + '/dictionary.json.gz';
+            
+            var compressed = fs.readFileSync(filePath);
+            var jsonString = zlib.gunzipSync(compressed).toString('utf8');
+            var data = JSON.parse(jsonString);
+            
+            this._initFromPreParsedData(data);
+        },
+        
+        /**
          * Load pre-parsed dictionary from a single gzipped JSON file (asynchronous).
          * 
          * Fetches <preParsedPath>/<language>/dictionary.json.gz, decompresses it,
@@ -1174,46 +1252,7 @@ var Typo;
                 var decompressed = response.body.pipeThrough(new DecompressionStream('gzip'));
                 return new Response(decompressed).json();
             }).then(function(data) {
-                // Version check
-                if (data.version !== PREPARSED_FORMAT_VERSION) {
-                    throw new Error(
-                        "Unsupported pre-parsed dictionary version: " + data.version +
-                        ". Expected version " + PREPARSED_FORMAT_VERSION + "."
-                    );
-                }
-                
-                // Build dictionaryTable Map from the two-part storage format:
-                //   words[]        → unflagged entries (stored as null in the Map)
-                //   flaggedWords{} → entries with rule code arrays
-                var map = new Map();
-                
-                var words = data.words;
-                for (var i = 0, len = words.length; i < len; i++) {
-                    map.set(words[i], null);
-                }
-                
-                var flagged = data.flaggedWords;
-                for (var word in flagged) {
-                    if (flagged.hasOwnProperty(word)) {
-                        map.set(word, flagged[word]);
-                    }
-                }
-                
-                self.dictionaryTable = map;
-                
-                // Restore compound rules (deserialize RegExp objects)
-                self.compoundRules = [];
-                if (data.compoundRules) {
-                    for (var j = 0; j < data.compoundRules.length; j++) {
-                        var ruleData = data.compoundRules[j];
-                        self.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
-                    }
-                }
-                
-                self.flags = data.flags || {};
-                self.replacementTable = data.replacementTable || [];
-                
-                self.loaded = true;
+                self._initFromPreParsedData(data);
                 if (callback) callback();
             }).catch(function(error) {
                 console.error('Failed to load pre-parsed dictionary:', error);
