@@ -158,17 +158,19 @@ const exported = dict.exportPreCalculated(function(progress) {
         lastPhase = progress.phase;
     }
     
-    if (progress.phase === 'bloom' || progress.phase === 'partitioning') {
-        const percent = Math.round((progress.current / progress.total) * 100);
-        process.stdout.write(`\r  ${progress.phase}: ${percent}%`);
+    if (progress.phase === 'collecting' || progress.phase === 'sorting') {
+        const percent = progress.total > 1 
+            ? Math.round((progress.current / progress.total) * 100) + '%'
+            : '...';
+        process.stdout.write(`\r  ${progress.phase}: ${percent}`);
     } else if (progress.phase === 'complete') {
         process.stdout.write('\r  ✓ Export complete\n');
     }
 });
 
-console.log('  ✓ Total words:', exported.index.totalWords.toLocaleString());
-console.log('  ✓ Partitions:', exported.index.partitionCount);
-console.log('  ✓ Bloom filter size:', exported.bloom.bits.length.toLocaleString(), 'bytes');
+console.log('  ✓ Total words:', exported.dictionary.totalWords.toLocaleString());
+console.log('  ✓ Unflagged words:', exported.dictionary.words.length.toLocaleString());
+console.log('  ✓ Flagged words:', exported.dictionary.flaggedWordCount.toLocaleString());
 
 // Display expansion diagnostics
 if (exported.diagnostics) {
@@ -233,58 +235,28 @@ if (exported.diagnostics) {
 console.log('');
 
 // Create output directory structure
-console.log('Step 4: Writing files to disk...');
+console.log('Step 4: Writing dictionary file to disk...');
+const zlib = require('zlib');
 const langOutputPath = path.join(outputPath, language);
-const wordsOutputPath = path.join(langOutputPath, 'words');
 
-fs.mkdirSync(wordsOutputPath, { recursive: true });
+fs.mkdirSync(langOutputPath, { recursive: true });
 
-// Write index file (pretty-printed for readability)
-const indexPath = path.join(langOutputPath, 'index.json');
-fs.writeFileSync(indexPath, JSON.stringify(exported.index, null, 2));
-console.log('  ✓ Written index.json');
+// Serialize the dictionary data (without diagnostics — those are for the console only)
+const jsonString = JSON.stringify(exported.dictionary);
+const jsonSize = Buffer.byteLength(jsonString, 'utf8');
+console.log('  Uncompressed JSON size:', (jsonSize / 1024 / 1024).toFixed(2), 'MB');
 
-// Write bloom filter file (compact - it's large)
-const bloomPath = path.join(langOutputPath, 'bloom.json');
-fs.writeFileSync(bloomPath, JSON.stringify(exported.bloom));
-const bloomSize = fs.statSync(bloomPath).size;
-console.log('  ✓ Written bloom.json (' + (bloomSize / 1024).toFixed(1) + ' KB)');
+// Gzip compress
+const compressed = zlib.gzipSync(jsonString, { level: 9 });
+const gzipSize = compressed.length;
+const ratio = ((1 - gzipSize / jsonSize) * 100).toFixed(1);
+console.log('  Compressed size:', (gzipSize / 1024 / 1024).toFixed(2), 'MB (' + ratio + '% reduction)');
 
-// Write compound rules file (pretty-printed for readability)
-const compoundPath = path.join(langOutputPath, 'compound.json');
-fs.writeFileSync(compoundPath, JSON.stringify(exported.compound, null, 2));
-console.log('  ✓ Written compound.json');
-
-// Write rules dictionary file (compact - can be large)
-const rulesPath = path.join(langOutputPath, 'rules.json');
-fs.writeFileSync(rulesPath, JSON.stringify(exported.rules));
-const rulesSize = fs.statSync(rulesPath).size;
-console.log('  ✓ Written rules.json (' + (rulesSize / 1024).toFixed(1) + ' KB)');
-
-// Write partition files (compact to save space)
-let partitionCount = 0;
-let totalBytes = 0;
-for (const prefix in exported.partitions) {
-    const partition = exported.partitions[prefix];
-    const partitionPath = path.join(wordsOutputPath, prefix + '.json');
-    const json = JSON.stringify(partition);  // Compact JSON
-    fs.writeFileSync(partitionPath, json);
-    partitionCount++;
-    totalBytes += json.length;
-    
-    // Progress indicator for partition writing
-    if (partitionCount % 50 === 0) {
-        process.stdout.write(`\r  Writing partitions: ${partitionCount}...`);
-    }
-}
-process.stdout.write(`\r  ✓ Written ${partitionCount} partition files\n`);
-console.log('  ✓ Total partition size:', (totalBytes / 1024 / 1024).toFixed(2), 'MB');
+// Write the single output file
+const dictPath = path.join(langOutputPath, 'dictionary.json.gz');
+fs.writeFileSync(dictPath, compressed);
+console.log('  ✓ Written', dictPath);
 console.log('');
-
-// Calculate total output size
-let totalSize = bloomSize + rulesSize + totalBytes;
-totalSize += fs.statSync(indexPath).size;
-totalSize += fs.statSync(compoundPath).size;
 
 // Generate summary
 const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -292,19 +264,16 @@ console.log('='.repeat(70));
 console.log('COMPLETE!');
 console.log('='.repeat(70));
 console.log('Output directory:', langOutputPath);
-console.log('Total output size:', (totalSize / 1024 / 1024).toFixed(2), 'MB');
+console.log('Output file:', dictPath);
+console.log('Uncompressed size:', (jsonSize / 1024 / 1024).toFixed(2), 'MB');
+console.log('Compressed size:', (gzipSize / 1024 / 1024).toFixed(2), 'MB');
 console.log('Total processing time:', totalTime + 's');
-console.log('');
-console.log('Files generated:');
-console.log('  - index.json       (partition index)');
-console.log('  - bloom.json       (bloom filter)');
-console.log('  - compound.json    (compound word rules)');
-console.log('  - rules.json       (affix rules for hasFlag)');
-console.log('  - words/*.json     (' + partitionCount + ' partition files)');
 console.log('');
 console.log('Usage in Typo.js:');
 console.log('  var dict = new Typo("' + language + '", null, null, {');
 console.log('    preCalculated: true,');
-console.log('    preCalculatedPath: "' + outputPath + '"');
+console.log('    preCalculatedPath: "' + outputPath + '",');
+console.log('    asyncLoad: true,');
+console.log('    loadedCallback: function(typo) { /* ready */ }');
 console.log('  });');
 console.log('');

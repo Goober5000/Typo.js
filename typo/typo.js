@@ -8,7 +8,7 @@
  * dictionaries.
  * 
  * ENHANCED VERSION: Supports both traditional .aff/.dic loading and pre-calculated
- * paged word lists for large dictionaries.
+ * dictionaries (a single gzipped JSON file containing the fully expanded word list).
  */
 var Typo;
 (function () {
@@ -18,7 +18,7 @@ var Typo;
      * Version of the pre-calculated dictionary format.
      * Increment this when making breaking changes to the format.
      */
-    var PRECALC_FORMAT_VERSION = 1;
+    var PRECALC_FORMAT_VERSION = 2;
     
     /**
      * Compare two strings using Unicode code point order.
@@ -34,138 +34,6 @@ var Typo;
         if (a > b) return 1;
         return 0;
     }
-    
-    /**
-     * Simple Bloom Filter implementation for fast negative lookups.
-     * Uses multiple hash functions to minimize false positives.
-     */
-    function BloomFilter(size, numHashes) {
-        this.size = size;
-        this.numHashes = numHashes || 3;
-        this.bits = new Uint8Array(Math.ceil(size / 8));
-    }
-    
-    BloomFilter.prototype = {
-        /**
-         * Add a word to the bloom filter
-         */
-        add: function(word) {
-            for (var i = 0; i < this.numHashes; i++) {
-                var hash = this._hash(word, i);
-                var bitIndex = hash % this.size;
-                var byteIndex = Math.floor(bitIndex / 8);
-                var bitOffset = bitIndex % 8;
-                this.bits[byteIndex] |= (1 << bitOffset);
-            }
-        },
-        
-        /**
-         * Check if a word might be in the set (may have false positives)
-         */
-        mightContain: function(word) {
-            for (var i = 0; i < this.numHashes; i++) {
-                var hash = this._hash(word, i);
-                var bitIndex = hash % this.size;
-                var byteIndex = Math.floor(bitIndex / 8);
-                var bitOffset = bitIndex % 8;
-                if ((this.bits[byteIndex] & (1 << bitOffset)) === 0) {
-                    return false; // Definitely not present
-                }
-            }
-            return true; // Might be present
-        },
-        
-        /**
-         * Simple hash function (DJB2 variant)
-         */
-        _hash: function(str, seed) {
-            var hash = 5381 + (seed * 1000);
-            for (var i = 0; i < str.length; i++) {
-                hash = ((hash << 5) + hash) + str.charCodeAt(i);
-                hash = hash >>> 0; // Convert to 32-bit unsigned integer
-            }
-            return hash;
-        },
-        
-        /**
-         * Export bloom filter to JSON-serializable format
-         */
-        toJSON: function() {
-            return {
-                size: this.size,
-                numHashes: this.numHashes,
-                bits: Array.from(this.bits)
-            };
-        },
-        
-        /**
-         * Create bloom filter from JSON data
-         */
-        fromJSON: function(data) {
-            this.size = data.size;
-            this.numHashes = data.numHashes;
-            this.bits = new Uint8Array(data.bits);
-            return this;
-        }
-    };
-    
-    /**
-     * Efficient LRU cache using Map (maintains insertion order)
-     * All operations are O(1) amortized.
-     */
-    function LRUCache(maxSize) {
-        this.maxSize = maxSize;
-        this.cache = new Map();
-    }
-    
-    LRUCache.prototype = {
-        /**
-         * Get a value and mark it as recently used
-         */
-        get: function(key) {
-            if (!this.cache.has(key)) {
-                return null;
-            }
-            // Move to end: delete and re-add to update position
-            var value = this.cache.get(key);
-            this.cache.delete(key);
-            this.cache.set(key, value);
-            return value;
-        },
-        
-        /**
-         * Set a value (adds or updates)
-         */
-        set: function(key, value) {
-            // If exists, delete first to update position
-            if (this.cache.has(key)) {
-                this.cache.delete(key);
-            }
-            
-            this.cache.set(key, value);
-            
-            // Evict oldest if over capacity
-            if (this.cache.size > this.maxSize) {
-                // Map.keys().next().value gives the oldest (first inserted) key
-                var oldestKey = this.cache.keys().next().value;
-                this.cache.delete(oldestKey);
-            }
-        },
-        
-        /**
-         * Check if key exists (without updating access order)
-         */
-        has: function(key) {
-            return this.cache.has(key);
-        },
-        
-        /**
-         * Add a key with a trivial value (for Set-like usage)
-         */
-        add: function(key) {
-            this.set(key, true);
-        }
-    };
     
     /**
      * Typo constructor.
@@ -196,7 +64,6 @@ var Typo;
      *                              {boolean} [preCalculated]: If true, load from pre-calculated word lists
      *                              instead of .aff/.dic files. Requires preCalculatedPath.
      *                              {string} [preCalculatedPath]: Path to pre-calculated dictionary files.
-     *                              {number} [partitionCacheSize]: Number of partitions to keep in cache (default: 20)
      *                              {Function} [loadingCallback]: Optional callback for reporting progress
      *                              during traditional dictionary loading. Called with
      *                              (phase, current, total) where phase is 'aff' or 'dic'.
@@ -225,15 +92,6 @@ var Typo;
         // Pre-calculated dictionary support
         this.preCalculated = settings.preCalculated || false;
         this.preCalculatedPath = settings.preCalculatedPath || null;
-        this.bloomFilter = null;
-        this.partitionIndex = null;
-        this.partitionCache = null;
-        this.notFoundCache = null;
-        
-        if (this.preCalculated) {
-            this.partitionCache = new LRUCache(settings.partitionCacheSize || 20);
-            this.notFoundCache = new LRUCache(settings.notFoundCacheSize || 10000);
-        }
         
         var self = this;
         var path;
@@ -1004,12 +862,7 @@ var Typo;
                 throw "Dictionary not loaded.";
             }
             
-            // PRE-CALCULATED MODE: Use bloom filter + paging
-            if (this.preCalculated) {
-                return this._checkPreCalculated(word);
-            }
-            
-            // TRADITIONAL MODE: Use dictionaryTable
+            // Both traditional and pre-calculated modes use dictionaryTable
             var ruleCodes = this.dictionaryTable.get(word);
             var i, _len;
             if (typeof ruleCodes === 'undefined') {
@@ -1049,22 +902,10 @@ var Typo;
             }
             if (flag in this.flags) {
                 if (typeof wordFlags === 'undefined') {
-                    // Get word flags from appropriate source
-                    if (this.preCalculated) {
-                        // PRE-CALCULATED MODE: Load partition and find word's rules
-                        var prefix = this._getPartitionPrefix(word);
-                        var words = this._loadPartition(prefix);  // Uses LRU cache
-                        var rules = this._findWordRules(words, word);
-                        if (rules) {
-                            wordFlags = Array.prototype.concat.apply([], rules);
-                        } else {
-                            wordFlags = [];
-                        }
-                    } else {
-                        // TRADITIONAL MODE: Use dictionaryTable
-                        var entry = this.dictionaryTable.get(word);
-                        wordFlags = entry ? Array.prototype.concat.apply([], entry) : [];
-                    }
+                    // Get word flags from dictionaryTable (same structure in
+                    // both traditional and pre-calculated modes)
+                    var entry = this.dictionaryTable.get(word);
+                    wordFlags = entry ? Array.prototype.concat.apply([], entry) : [];
                 }
                 if (wordFlags && wordFlags.indexOf(this.flags[flag]) !== -1) {
                     return true;
@@ -1309,98 +1150,82 @@ var Typo;
          */
         
         /**
-         * Load pre-calculated dictionary from JSON files (synchronous)
+         * Load pre-calculated dictionary (synchronous).
+         * 
+         * Not supported for format version 2+, which uses gzip compression
+         * and requires the asynchronous fetch/DecompressionStream APIs.
+         * Use asyncLoad: true in settings instead.
+         * 
          * @private
          */
         _loadPreCalculated: function() {
-            var self = this;
-            var basePath = this.preCalculatedPath + '/' + this.dictionary;
-            
-            // Load index
-            var indexData = this._readFile(basePath + '/index.json');
-            var index = JSON.parse(indexData);
-            
-            // Version check
-            if (index.version !== PRECALC_FORMAT_VERSION) {
-                throw "Unsupported pre-calculated dictionary version: " + index.version + 
-                      ". Expected version " + PRECALC_FORMAT_VERSION + ".";
-            }
-            
-            this.partitionIndex = index.partitions;
-            
-            // Load and initialize bloom filter
-            var bloomData = this._readFile(basePath + '/bloom.json');
-            var bloomJson = JSON.parse(bloomData);
-            this.bloomFilter = new BloomFilter(bloomJson.size, bloomJson.numHashes);
-            this.bloomFilter.fromJSON(bloomJson);
-            
-            // Load compound word rules and flags
-            var compoundData = this._readFile(basePath + '/compound.json');
-            var compoundJson = JSON.parse(compoundData);
-            
-            // Restore compound rules (deserialize RegExp objects)
-            this.compoundRules = [];
-            for (var i = 0; i < compoundJson.compoundRules.length; i++) {
-                var ruleData = compoundJson.compoundRules[i];
-                this.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
-            }
-            
-            this.compoundRuleCodes = compoundJson.compoundRuleCodes;
-            this.flags = compoundJson.flags;
-            this.replacementTable = compoundJson.replacementTable || [];  // For suggest() support
-            
-            // Note: this.rules (affix rule definitions) is not loaded in pre-calculated
-            // mode. It is only used during traditional dictionary construction (_applyRule,
-            // _applySingleRuleToWord, etc.), not at spell-check time. The per-word rule
-            // codes needed by hasFlag are stored in the partition files instead.
-            
-            this.loaded = true;
+            throw "Synchronous loading is not supported for pre-calculated dictionaries. " +
+                  "Use asyncLoad: true in the Typo constructor settings.";
         },
         
         /**
-         * Load pre-calculated dictionary from JSON files (asynchronous)
+         * Load pre-calculated dictionary from a single gzipped JSON file (asynchronous).
+         * 
+         * Fetches <preCalculatedPath>/<language>/dictionary.json.gz, decompresses it,
+         * and populates the same dictionaryTable / compoundRules / flags /
+         * replacementTable structures that the traditional .aff/.dic parser builds.
+         * After loading, the standard check / checkExact / hasFlag / suggest methods
+         * work identically to traditional mode — no special runtime code paths needed.
+         * 
+         * @param {Function} callback Called when loading is complete.
          * @private
          */
         _loadPreCalculatedAsync: function(callback) {
             var self = this;
-            var basePath = this.preCalculatedPath + '/' + this.dictionary;
+            var url = this.preCalculatedPath + '/' + this.dictionary + '/dictionary.json.gz';
             
-            // Load index, bloom filter, and compound data
-            var indexPromise = this._readFile(basePath + '/index.json', 'utf8', true);
-            var bloomPromise = this._readFile(basePath + '/bloom.json', 'utf8', true);
-            var compoundPromise = this._readFile(basePath + '/compound.json', 'utf8', true);
-            
-            Promise.all([indexPromise, bloomPromise, compoundPromise]).then(function(results) {
-                var index = JSON.parse(results[0]);
-                
-                // Version check
-                if (index.version !== PRECALC_FORMAT_VERSION) {
-                    throw "Unsupported pre-calculated dictionary version: " + index.version + 
-                          ". Expected version " + PRECALC_FORMAT_VERSION + ".";
+            fetch(url).then(function(response) {
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ' loading ' + url);
                 }
                 
-                self.partitionIndex = index.partitions;
+                // Decompress the gzipped response using the Compression Streams API
+                var decompressed = response.body.pipeThrough(new DecompressionStream('gzip'));
+                return new Response(decompressed).json();
+            }).then(function(data) {
+                // Version check
+                if (data.version !== PRECALC_FORMAT_VERSION) {
+                    throw new Error(
+                        "Unsupported pre-calculated dictionary version: " + data.version +
+                        ". Expected version " + PRECALC_FORMAT_VERSION + "."
+                    );
+                }
                 
-                var bloomJson = JSON.parse(results[1]);
-                self.bloomFilter = new BloomFilter(bloomJson.size, bloomJson.numHashes);
-                self.bloomFilter.fromJSON(bloomJson);
+                // Build dictionaryTable Map from the two-part storage format:
+                //   words[]        → unflagged entries (stored as null in the Map)
+                //   flaggedWords{} → entries with rule code arrays
+                var map = new Map();
                 
-                var compoundJson = JSON.parse(results[2]);
+                var words = data.words;
+                for (var i = 0, len = words.length; i < len; i++) {
+                    map.set(words[i], null);
+                }
+                
+                var flagged = data.flaggedWords;
+                for (var word in flagged) {
+                    if (flagged.hasOwnProperty(word)) {
+                        map.set(word, flagged[word]);
+                    }
+                }
+                
+                self.dictionaryTable = map;
                 
                 // Restore compound rules (deserialize RegExp objects)
                 self.compoundRules = [];
-                for (var i = 0; i < compoundJson.compoundRules.length; i++) {
-                    var ruleData = compoundJson.compoundRules[i];
-                    self.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
+                if (data.compoundRules) {
+                    for (var j = 0; j < data.compoundRules.length; j++) {
+                        var ruleData = data.compoundRules[j];
+                        self.compoundRules.push(new RegExp(ruleData.source, ruleData.flags));
+                    }
                 }
                 
-                self.compoundRuleCodes = compoundJson.compoundRuleCodes;
-                self.flags = compoundJson.flags;
-                self.replacementTable = compoundJson.replacementTable || [];  // For suggest() support
-                
-                // Note: this.rules (affix rule definitions) is not loaded in pre-calculated
-                // mode. It is only used during traditional dictionary construction, not at
-                // spell-check time.
+                self.flags = data.flags || {};
+                self.replacementTable = data.replacementTable || [];
                 
                 self.loaded = true;
                 if (callback) callback();
@@ -1411,183 +1236,21 @@ var Typo;
         },
         
         /**
-         * Load a word partition from file (with caching)
-         * @param {string} prefix - The partition prefix (e.g., "ab", "he")
-         * @returns {Array} Array of word objects {w: word, r: rules} in this partition
-         * @private
-         */
-        _loadPartition: function(prefix) {
-            // Check cache first
-            if (this.partitionCache.has(prefix)) {
-                return this.partitionCache.get(prefix);
-            }
-            
-            // Load from file
-            var partitionInfo = this.partitionIndex[prefix];
-            if (!partitionInfo) {
-                return [];
-            }
-            
-            var basePath = this.preCalculatedPath + '/' + this.dictionary;
-            var partitionData = this._readFile(basePath + '/' + partitionInfo.file);
-            var partition = JSON.parse(partitionData);
-            
-            // Cache partition
-            this.partitionCache.set(prefix, partition.words);
-            
-            return partition.words;
-        },
-        
-        /**
-         * Binary search for a word in a sorted array of word objects
-         * @param {Array} words - Sorted array of word objects {w: word, r: rules}
-         * @param {string} target - Word to find
-         * @returns {boolean} True if word found
-         * @private
-         */
-        _binarySearch: function(words, target) {
-            var left = 0;
-            var right = words.length - 1;
-            
-            while (left <= right) {
-                var mid = Math.floor((left + right) / 2);
-                var wordData = words[mid];
-                var comparison = compareStrings(wordData.w, target);
-                
-                if (comparison === 0) {
-                    return true;
-                } else if (comparison < 0) {
-                    left = mid + 1;
-                } else {
-                    right = mid - 1;
-                }
-            }
-            
-            return false;
-        },
-        
-        /**
-         * Binary search to find a word's rule codes in a sorted partition
-         * @param {Array} words - Sorted array of word objects {w: word, r: rules}
-         * @param {string} target - Word to find
-         * @returns {Array|null} Rule codes array if found, null otherwise
-         * @private
-         */
-        _findWordRules: function(words, target) {
-            var left = 0;
-            var right = words.length - 1;
-            
-            while (left <= right) {
-                var mid = Math.floor((left + right) / 2);
-                var wordData = words[mid];
-                var comparison = compareStrings(wordData.w, target);
-                
-                if (comparison === 0) {
-                    return wordData.r;  // Return rules (may be null)
-                } else if (comparison < 0) {
-                    left = mid + 1;
-                } else {
-                    right = mid - 1;
-                }
-            }
-            
-            return null;  // Word not found
-        },
-        
-        /**
-         * Get the partition prefix for a word.
-         * Always returns a 2-character prefix, padding single-character words with '_'.
-         * @param {string} word - The word to get the prefix for
-         * @returns {string} A 2-character lowercase prefix
-         * @private
-         */
-        _getPartitionPrefix: function(word) {
-            if (word.length >= 2) {
-                return word.substring(0, 2).toLowerCase();
-            } else {
-                // Pad single-character words with underscore
-                return ('_' + word).toLowerCase();
-            }
-        },
-        
-        /**
-         * Check if a word exists in pre-calculated dictionary (synchronous)
-         * @param {string} word - Word to check
-         * @returns {boolean} True if word found
-         * @private
-         */
-        _checkPreCalculated: function(word) {
-            // Check negative cache first
-            if (this.notFoundCache.has(word)) {
-                return false;
-            }
-            
-            // Check bloom filter (fast rejection of misspellings)
-            if (!this.bloomFilter.mightContain(word)) {
-                this.notFoundCache.add(word);
-                return false;
-            }
-            
-            // Determine partition
-            var prefix = this._getPartitionPrefix(word);
-            
-            // Load partition and search
-            var words = this._loadPartition(prefix);
-            var found = this._binarySearch(words, word);
-            
-            if (found) {
-                // Word is in the partition. Check its rule codes for ONLYINCOMPOUND,
-                // mirroring the traditional checkExact logic (lines 862-874).
-                // The partition is already cached, so this is a cheap lookup.
-                var ruleCodes = this._findWordRules(words, word);
-                
-                if (ruleCodes === null) {
-                    // Word has no flags — accept unconditionally.
-                    // (Equivalent to the traditional "ruleCodes === null" branch.)
-                    return true;
-                }
-                
-                // Word has flags. Accept if ANY rule set lacks ONLYINCOMPOUND.
-                // Reject only if ALL rule sets have it (word is only valid inside compounds).
-                for (var i = 0, _len = ruleCodes.length; i < _len; i++) {
-                    if (!this.hasFlag(word, "ONLYINCOMPOUND", ruleCodes[i])) {
-                        return true;
-                    }
-                }
-                
-                // All rule sets have ONLYINCOMPOUND — reject as standalone word.
-                // This mirrors the traditional checkExact behavior, which returns
-                // false without attempting a compound check.
-                this.notFoundCache.add(word);
-                return false;
-            }
-            
-            // Word not found in partition. Check if it might be a compound word.
-            if ("COMPOUNDMIN" in this.flags && word.length >= this.flags.COMPOUNDMIN) {
-                for (var i = 0, _len = this.compoundRules.length; i < _len; i++) {
-                    if (word.match(this.compoundRules[i])) {
-                        return true;  // Valid compound word
-                    }
-                }
-            }
-            
-            this.notFoundCache.add(word);
-            return false;
-        },
-        
-        /**
-         * Export the current dictionary as pre-calculated word lists
-         * This should be called after loading a traditional .aff/.dic dictionary
+         * Export the current dictionary for pre-calculated mode.
+         * This should be called after loading a traditional .aff/.dic dictionary.
+         * 
+         * The exported object contains two top-level keys:
+         *   - dictionary: the data to be serialized and loaded at runtime
+         *   - diagnostics: expansion statistics for analysis (not saved to file)
+         * 
+         * The dictionary object stores unflagged words as a sorted string array
+         * and flagged words (those with rule codes) as an object, keeping the
+         * file compact and the load-time Map construction straightforward.
          * 
          * @param {Function} [progressCallback] Optional callback for progress updates.
          *        Called with object: { phase: string, current: number, total: number }
-         *        Phases: 'collecting', 'sorting', 'bloom', 'partitioning', 'complete'
-         * @returns {Object} Object containing all data needed for pre-calculated mode:
-         *   {
-         *     index: {...},        // Partition index
-         *     bloom: {...},        // Bloom filter data
-         *     partitions: {...}    // Map of prefix -> word array
-         *   }
+         *        Phases: 'collecting', 'sorting', 'complete'
+         * @returns {Object} { dictionary: {...}, diagnostics: {...} }
          */
         exportPreCalculated: function(progressCallback) {
             if (!this.loaded) {
@@ -1605,115 +1268,54 @@ var Typo;
                 }
             };
             
-            // Collect all unique words from dictionaryTable with their rule codes
+            // Separate words into unflagged (null rules) and flagged
             reportProgress('collecting', 0, 1);
-            var allWords = [];
+            var words = [];
+            var flaggedWords = {};
+            var totalWords = 0;
+            
             this.dictionaryTable.forEach(function(rules, word) {
-                allWords.push({
-                    word: word,
-                    rules: rules  // null or array of rule arrays
-                });
+                totalWords++;
+                if (rules === null) {
+                    words.push(word);
+                } else {
+                    flaggedWords[word] = rules;
+                }
             });
+            reportProgress('collecting', totalWords, totalWords);
             
-            // Sort words using Unicode code point order for consistency
+            // Sort unflagged words for better gzip compression
+            // (similar prefixes cluster together, improving deflate ratio)
             reportProgress('sorting', 0, 1);
-            allWords.sort(function(a, b) {
-                return compareStrings(a.word, b.word);
-            });
+            words.sort(compareStrings);
+            reportProgress('sorting', 1, 1);
             
-            var totalWords = allWords.length;
-            
-            // Create bloom filter (size = words * 10 bits, ~1% false positive rate)
-            var bloomSize = totalWords * 10;
-            var bloom = new BloomFilter(bloomSize, 3);
-            
-            // Add all words to bloom filter (with progress reporting)
-            for (var i = 0; i < allWords.length; i++) {
-                bloom.add(allWords[i].word);
-                if (i % 10000 === 0) {
-                    reportProgress('bloom', i, totalWords);
-                }
-            }
-            reportProgress('bloom', totalWords, totalWords);
-            
-            // Partition words by first 2 characters (with padding for single-char words)
-            var partitions = {};
-            var partitionCounts = {};
-            
-            for (var i = 0; i < allWords.length; i++) {
-                var wordData = allWords[i];
-                var word = wordData.word;
-                var prefix = this._getPartitionPrefix(word);
-                
-                if (!partitions[prefix]) {
-                    partitions[prefix] = [];
-                    partitionCounts[prefix] = 0;
-                }
-                
-                // Store word with its rule codes
-                partitions[prefix].push({
-                    w: word,           // word
-                    r: wordData.rules  // rules (null or array)
-                });
-                partitionCounts[prefix]++;
-                
-                if (i % 10000 === 0) {
-                    reportProgress('partitioning', i, totalWords);
-                }
-            }
-            reportProgress('partitioning', totalWords, totalWords);
-            
-            // Build index
-            var index = {
-                version: PRECALC_FORMAT_VERSION,
-                language: this.dictionary,
-                totalWords: totalWords,
-                partitionCount: Object.keys(partitions).length,
-                bloomFilterSize: bloomSize,
-                partitions: {}
-            };
-            
-            for (var prefix in partitionCounts) {
-                index.partitions[prefix] = {
-                    file: 'words/' + prefix + '.json',
-                    count: partitionCounts[prefix]
-                };
-            }
-            
-            // Prepare partition data
-            var partitionData = {};
-            for (var prefix in partitions) {
-                partitionData[prefix] = {
-                    prefix: prefix,
-                    words: partitions[prefix]  // Array of {w: word, r: rules}
-                };
-            }
-            
-            // Export compound word rules and flags for full feature parity
-            var compoundData = {
-                compoundRules: [],
-                compoundRuleCodes: this.compoundRuleCodes,
-                flags: this.flags,
-                replacementTable: this.replacementTable  // For suggest() support
-            };
-            
-            // Serialize RegExp objects to strings
+            // Serialize compound rules (RegExp → {source, flags})
+            var compoundRules = [];
             for (var i = 0; i < this.compoundRules.length; i++) {
                 var rule = this.compoundRules[i];
-                compoundData.compoundRules.push({
+                compoundRules.push({
                     source: rule.source,
                     flags: rule.flags
                 });
             }
             
+            var flaggedWordCount = Object.keys(flaggedWords).length;
+            
             reportProgress('complete', totalWords, totalWords);
             
             return {
-                index: index,
-                bloom: bloom.toJSON(),
-                partitions: partitionData,
-                compound: compoundData,
-                rules: this.rules,  // Export rules dictionary for hasFlag
+                dictionary: {
+                    version: PRECALC_FORMAT_VERSION,
+                    language: this.dictionary,
+                    totalWords: totalWords,
+                    flaggedWordCount: flaggedWordCount,
+                    words: words,
+                    flaggedWords: flaggedWords,
+                    compoundRules: compoundRules,
+                    flags: this.flags,
+                    replacementTable: this.replacementTable
+                },
                 diagnostics: {
                     expansionLimitHits: this._expansionLimitHits,
                     depthLimitHits: this._depthLimitHits,
